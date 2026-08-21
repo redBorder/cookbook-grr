@@ -35,6 +35,6 @@ This is the cookbook for grr integration in redborder.
 GNU AFFERO GENERAL PUBLIC LICENSE Version 3, 19 November 2007
 See the [LICENSE](https://github.com/redBorder/cookbook-grr/blob/HEAD/LICENSE) file for details.
 
-Authors: Vicente Mesa <vimesa@redborder.com>
+Authors: Félix López <flopez@redborder.com>, Vicente Mesa <vimesa@redborder.com>
 
 © 2025 Redborder
