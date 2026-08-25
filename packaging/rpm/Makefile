@@ -1,4 +1,4 @@
-PACKAGE_NAME?=	cookbook-airflow
+PACKAGE_NAME?=	cookbook-grr
 
 VERSION?=	$(shell git describe --abbrev=6 --tags HEAD --always | sed 's/-/_/g')
 
