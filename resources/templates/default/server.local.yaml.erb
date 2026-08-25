@@ -1,0 +1,18 @@
+Mysql.host: <%= @mysql_host %>
+Mysql.port: <%= @mysql_port %>
+Mysql.database: <%= @mysql_db %>
+Mysql.username: <%= @mysql_user %>
+Mysql.password: <%= @mysql_password %>
+
+Datastore.implementation: MysqlDB
+
+AdminUI.url: "<%= @adminui_url %>"
+AdminUI.port: <%= @adminui_port %>
+
+Frontend.bind_port: <%= @frontend_port %>
+Client.server_urls:
+  - "<%= @frontend_url %>/"
+
+Client.fleetspeak_enabled: true
+Server.fleetspeak_message_listen_address: "<%= @fleetspeak_grr_listen %>"
+Server.fleetspeak_server: "<%= @fleetspeak_admin_listen %>"
