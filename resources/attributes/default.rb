@@ -38,7 +38,7 @@ default['grr']['frontend']['external_url'] = "http://#{default['grr']['hostname'
 default['grr']['fleetspeak']['https_listen'] = 'localhost:9090'
 default['grr']['fleetspeak']['admin_listen'] = 'localhost:9091'
 default['grr']['fleetspeak']['grr_listen']   = 'localhost:1138'
-default['grr']['fleetspeak']['cert_dir']     = '/etc/fleetspeak-server/certs'
+default['grr']['fleetspeak']['cert_dir']     = '/opt/grr/venv/fleetspeak-server-bin/etc/fleetspeak-server'
 
 # -----------------------------------------------------------------------
 # Usuario admin de la UI de GRR
@@ -50,6 +50,6 @@ default['grr']['admin']['password'] = 'redborder'
 # Rutas — AJUSTA ESTO a como las genere el RPM 'grr'
 # -----------------------------------------------------------------------
 default['grr']['paths']['config_dir']         = '/etc/grr'
-default['grr']['paths']['server_local_yaml']  = '/etc/grr/server.local.yaml'
-default['grr']['paths']['fleetspeak_dir']     = '/etc/fleetspeak-server'
-default['grr']['paths']['config_updater_bin'] = '/usr/bin/grr_config_updater'
+default['grr']['paths']['server_local_yaml']  = '/opt/grr/venv/install_data/etc/server.local.yaml'
+default['grr']['paths']['fleetspeak_dir']     = '/opt/grr/venv/fleetspeak-server-bin/etc/fleetspeak-server'
+default['grr']['paths']['config_updater_bin'] = '/opt/grr/venv/bin/grr_config_updater'

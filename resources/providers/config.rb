@@ -75,6 +75,7 @@ def configure_mariadb
   grr_database = new_resource.grr_database
   fleetspeak_database = new_resource.fleetspeak_database
   fleetspeak_db_user = new_resource.fleetspeak_db_user
+  fleetspeak_db_password = new_resource.fleetspeak_db_password
 
   template '/etc/my.cnf.d/grr.cnf' do
     source 'grr.cnf.erb'
@@ -94,13 +95,14 @@ def configure_mariadb
     command <<-EOH
       set -e
       mariadb -e "CREATE USER IF NOT EXISTS '#{grr_db_user}'@'localhost' IDENTIFIED BY '#{grr_db_password}';"
+      mariadb -e "CREATE USER IF NOT EXISTS '#{fleetspeak_db_user}'@'localhost' IDENTIFIED BY '#{fleetspeak_db_password}';"
       mariadb -e "CREATE DATABASE IF NOT EXISTS #{grr_database} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
       mariadb -e "CREATE DATABASE IF NOT EXISTS #{fleetspeak_database} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-      mariadb -e "GRANT ALL PRIVILEGES ON #{.grr_database}.* TO '#{grr_db_user}'@'localhost';"
+      mariadb -e "GRANT ALL PRIVILEGES ON #{grr_database}.* TO '#{grr_db_user}'@'localhost';"
       mariadb -e "GRANT ALL PRIVILEGES ON #{fleetspeak_database}.* TO '#{fleetspeak_db_user}'@'localhost';"
       mariadb -e "FLUSH PRIVILEGES;"
     EOH
-    not_if "mariadb -sN -e \"SELECT User FROM mysql.user WHERE User='#{grr_db_user}'\" | grep -q #{grr_db_user}"
+    not_if "mariadb -sN -e \"SELECT User FROM mysql.user WHERE User='#{grr_db_user}'\" | grep -q #{grr_db_user} && mariadb -sN -e \"SELECT User FROM mysql.user WHERE User='#{fleetspeak_db_user}'\" | grep -q #{fleetspeak_db_user}"
   end
 
   execute 'secure_mariadb_installation' do
@@ -211,9 +213,18 @@ def install_grr
   frontend_url = new_resource.frontend_url
   fleetspeak_grr_listen = new_resource.fleetspeak_grr_listen
   fleetspeak_admin_listen = new_resource.fleetspeak_admin_listen
+  fleetspeak_database = new_resource.fleetspeak_database
+  admin_password = new_resource.admin_password
   hostname = new_resource.hostname
 
   directory config_dir do
+    owner 'root'
+    group 'root'
+    mode '0750'
+    recursive true
+  end
+
+  directory ::File.dirname(server_local_yaml) do
     owner 'root'
     group 'root'
     mode '0750'
@@ -255,12 +266,12 @@ def install_grr
         --config=#{server_local_yaml} \
         --mysql_hostname=#{mysql_host} \
         --mysql_port=#{mysql_port} \
-        --mysql_database=#{grr_database} \
+        --mysql_db=#{grr_database} \
+        --mysql_fleetspeak_db=#{fleetspeak_database} \
         --mysql_username=#{grr_db_user} \
         --mysql_password=#{grr_db_password} \
         --external_hostname=#{hostname} \
-        --adminui_url=#{adminui_url} \
-        --frontend_url=#{frontend_url}
+        --admin_password=#{admin_password}
     EOH
     not_if "grep -q 'PrivateKeys.server_key' #{server_local_yaml}"
   end
@@ -273,13 +284,14 @@ def install_grr
   # con --helpfull en tu build concreto y ajusta si hace falta.
   execute 'grr_add_admin_user' do
     command <<-EOH
-      printf '%s\\n%s\\n' '#{admin_password}' '#{admin_password}' | \
-        #{config_updater_bin} --config=#{server_local_yaml} \
-        add_user #{admin_username} --admin
+      #{config_updater_bin} --config=#{server_local_yaml} \
+        add_user #{admin_username} \
+        --password #{admin_password} \
+        --admin True
     EOH
     not_if <<-EOH
       #{config_updater_bin} --config=#{server_local_yaml} \
-        show_user #{admin_username} 2>/dev/null | grep -q '^Username: #{admin_username}$'
+        show_user --username #{admin_username} 2>/dev/null | grep -q '^Username: #{admin_username}$'
     EOH
   end
 end
