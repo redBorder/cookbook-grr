@@ -11,7 +11,6 @@ action :add do
 end
 
 action :remove do
-
   drop_databases
   stop_services
 
@@ -104,7 +103,6 @@ def configure_mariadb
 end
 
 def configure_fleetspeak
-
   fleetspeak_cert_dir = new_resource.fleetspeak_cert_dir
   fleetspeak_dir = new_resource.fleetspeak_dir
   hostname = new_resource.hostname
@@ -325,22 +323,22 @@ end
 def register_in_consul
   begin
     grr_consul_services.each do |svc|
-      unless node['grr'][svc[:key]]['registered']
-        query = {}
-        query['ID'] = svc[:id]
-        query['Name'] = svc[:name]
-        query['Address'] = node['ipaddress']
-        query['Port'] = svc[:port]
-        json_query = Chef::JSONCompat.to_json(query)
+      next if node['grr'][svc[:key]]['registered']
 
-        execute "Register #{svc[:name]} in consul" do
-          command "curl -X PUT http://localhost:8500/v1/agent/service/register -d '#{json_query}' &>/dev/null"
-          action :nothing
-        end.run_action(:run)
+      query = {}
+      query['ID'] = svc[:id]
+      query['Name'] = svc[:name]
+      query['Address'] = node['ipaddress']
+      query['Port'] = svc[:port]
+      json_query = Chef::JSONCompat.to_json(query)
 
-        node.normal['grr'][svc[:key]]['registered'] = true
-        Chef::Log.info("#{svc[:name]} service has been registered to consul")
-      end
+      execute "Register #{svc[:name]} in consul" do
+        command "curl -X PUT http://localhost:8500/v1/agent/service/register -d '#{json_query}' &>/dev/null"
+        action :nothing
+      end.run_action(:run)
+
+      node.default['grr'][svc[:key]]['registered'] = true
+      Chef::Log.info("#{svc[:name]} service has been registered to consul")
     end
   rescue => e
     Chef::Log.error(e.message)
@@ -350,15 +348,15 @@ end
 def deregister_from_consul
   begin
     grr_consul_services.each do |svc|
-      if node['grr'][svc[:key]]['registered']
-        execute "Deregister #{svc[:name]} in consul" do
-          command "curl -X PUT http://localhost:8500/v1/agent/service/deregister/#{svc[:id]} &>/dev/null"
-          action :nothing
-        end.run_action(:run)
+      next unless node['grr'][svc[:key]]['registered']
 
-        node.normal['grr'][svc[:key]]['registered'] = false
-        Chef::Log.info("#{svc[:name]} service has been deregistered from consul")
-      end
+      execute "Deregister #{svc[:name]} in consul" do
+        command "curl -X PUT http://localhost:8500/v1/agent/service/deregister/#{svc[:id]} &>/dev/null"
+        action :nothing
+      end.run_action(:run)
+
+      node.default['grr'][svc[:key]]['registered'] = false
+      Chef::Log.info("#{svc[:name]} service has been deregistered from consul")
     end
   rescue => e
     Chef::Log.error(e.message)

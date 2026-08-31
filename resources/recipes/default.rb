@@ -1,5 +1,5 @@
 #
-# Cookbook Name:: grr
+# Cookbook:: grr
 # Recipe:: default
 #
 

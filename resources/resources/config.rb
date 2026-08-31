@@ -1,6 +1,8 @@
 # Cookbook:: grr
 # Resource:: config
 
+unified_mode true
+
 actions :add, :remove, :register, :deregister
 default_action :add
 
