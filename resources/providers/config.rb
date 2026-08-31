@@ -74,8 +74,7 @@ def configure_mariadb
     owner 'root'
     group 'root'
     mode '0644'
-    variables(max_allowed_packet: max_allowed_packet, 
-              log_bin_trust_function_creators: log_bin_trust_function_creators)
+    variables(max_allowed_packet: max_allowed_packet, log_bin_trust_function_creators: log_bin_trust_function_creators)
     notifies :restart, 'service[mariadb]', :delayed
   end
 
@@ -114,7 +113,7 @@ def configure_fleetspeak
 
   fleetspeak_cert_dir = new_resource.fleetspeak_cert_dir
   fleetspeak_dir = new_resource.fleetspeak_dir
-  hostname= new_resource.hostname
+  hostname = new_resource.hostname
   fleetspeak_db_user = new_resource.fleetspeak_db_user
   fleetspeak_db_password = new_resource.fleetspeak_db_password
   mysql_host = new_resource.mysql_host
@@ -168,7 +167,7 @@ def configure_fleetspeak
         https_listen: fleetspeak_https_listen,
         admin_listen: fleetspeak_admin_listen,
         certificate_pem: ::IO.read(cert_file).gsub("\n", '\n'),
-        key_pem: ::IO.read(key_file).gsub("\n", '\n')
+        key_pem: ::IO.read(key_file).gsub("\n", '\n'),
       }
     }
   end
@@ -236,7 +235,7 @@ def install_grr
   admin_password = new_resource.admin_password
   admin_username = new_resource.admin_username
   server_local_yaml = new_resource.server_local_yaml
-  config_updater_bin =new_resource.config_updater_bin
+  config_updater_bin = new_resource.config_updater_bin
 
   execute 'grr_add_admin_user' do
     command <<-EOH
@@ -312,20 +311,20 @@ def grr_consul_services
       key: 'adminui',
       id: "grr-adminui-#{node['hostname']}",
       name: 'grr-adminui',
-      port: adminui_port
+      port: adminui_port,
     },
     {
       key: 'frontend',
       id: "grr-frontend-#{node['hostname']}",
       name: 'grr-frontend',
-      port: frontend_port
+      port: frontend_port,
     },
     {
       key: 'fleetspeak',
       id: "grr-fleetspeak-#{node['hostname']}",
       name: 'grr-fleetspeak',
-      port: fleetspeak_port
-    }
+      port: fleetspeak_port,
+    },
   ]
 end
 
