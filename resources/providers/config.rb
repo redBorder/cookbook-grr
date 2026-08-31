@@ -8,13 +8,11 @@ action :add do
   configure_fleetspeak
   install_grr
   start_services
-
 end
 
 action :remove do
 
   drop_databases
-
   stop_services
 
   package 'grr' do
@@ -35,23 +33,19 @@ action :remove do
     recursive true
     action :delete
   end
-
 end
 
 action :register do
   register_in_consul
-
 end
 
 action :deregister do
   deregister_from_consul
-
 end
 
 # ----------------
 # Implementation
 # ----------------
-
 private
 
 def configure_mariadb
