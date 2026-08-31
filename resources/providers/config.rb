@@ -9,13 +9,10 @@ action :add do
   install_grr
   start_services
 
-  # new_resource.updated_by_last_action(true)
 end
 
 action :remove do
 
-  # El orden importa: hace falta MariaDB arrancado para poder hacer el
-  # DROP, así que se borra la BD *antes* de parar/desinstalar nada.
   drop_databases
 
   stop_services
@@ -28,39 +25,32 @@ action :remove do
     action [:stop, :disable]
   end
 
-  # Esto desinstala MariaDB del nodo por completo.
   package %w(mariadb-server mariadb-connector-c-devel) do
     action :remove
   end
 
   config_dir = new_resource.config_dir
-  fleetspeak_dir = new_resource.fleetspeak_dir
 
   directory config_dir do
     recursive true
     action :delete
   end
 
-  # new_resource.updated_by_last_action(true)
 end
 
 action :register do
   register_in_consul
 
-  # new_resource.updated_by_last_action(true)
 end
 
 action :deregister do
   deregister_from_consul
 
-  # new_resource.updated_by_last_action(true)
 end
 
 # ----------------
-# Implementación
+# Implementation
 # ----------------
-
-# etc  [ package: gcc python3-devel ]
 
 private
 
@@ -76,6 +66,7 @@ def configure_mariadb
   fleetspeak_database = new_resource.fleetspeak_database
   fleetspeak_db_user = new_resource.fleetspeak_db_user
   fleetspeak_db_password = new_resource.fleetspeak_db_password
+  log_bin_trust_function_creators = new_resource.log_bin_trust_function_creators
 
   template '/etc/my.cnf.d/grr.cnf' do
     source 'grr.cnf.erb'
@@ -83,7 +74,8 @@ def configure_mariadb
     owner 'root'
     group 'root'
     mode '0644'
-    variables(max_allowed_packet: max_allowed_packet)
+    variables(max_allowed_packet: max_allowed_packet, 
+              log_bin_trust_function_creators: log_bin_trust_function_creators)
     notifies :restart, 'service[mariadb]', :delayed
   end
 
@@ -169,8 +161,6 @@ def configure_fleetspeak
     owner 'root'
     group 'root'
     mode '0640'
-    # lazy: el PEM se lee en tiempo de convergencia, después de que el
-    # execute anterior haya generado el certificado.
     variables lazy {
       {
         mysql_dsn: "#{fleetspeak_db_user}:#{fleetspeak_db_password}" \
@@ -181,7 +171,6 @@ def configure_fleetspeak
         key_pem: ::IO.read(key_file).gsub("\n", '\n')
       }
     }
-    notifies :restart, 'service[fleetspeak-server]', :delayed
   end
 
   template "#{fleetspeak_dir}/server.services.config" do
@@ -201,7 +190,7 @@ def install_grr
   end
 
   config_dir = new_resource.config_dir
-  server_local_yaml = new_resource.server_local_yaml
+  install_data_dir = new_resource.install_data_dir
   mysql_host = new_resource.mysql_host
   mysql_port = new_resource.mysql_port
   grr_database = new_resource.grr_database
@@ -213,9 +202,6 @@ def install_grr
   frontend_url = new_resource.frontend_url
   fleetspeak_grr_listen = new_resource.fleetspeak_grr_listen
   fleetspeak_admin_listen = new_resource.fleetspeak_admin_listen
-  fleetspeak_database = new_resource.fleetspeak_database
-  admin_password = new_resource.admin_password
-  hostname = new_resource.hostname
 
   directory config_dir do
     owner 'root'
@@ -224,14 +210,7 @@ def install_grr
     recursive true
   end
 
-  directory ::File.dirname(server_local_yaml) do
-    owner 'root'
-    group 'root'
-    mode '0750'
-    recursive true
-  end
-
-  template server_local_yaml do
+  template "#{install_data_dir}/etc/server.local.yaml" do
     source 'server.local.yaml.erb'
     cookbook 'grr'
     owner 'root'
@@ -248,40 +227,17 @@ def install_grr
       frontend_port: frontend_port,
       frontend_url: frontend_url,
       fleetspeak_grr_listen: fleetspeak_grr_listen,
-      fleetspeak_admin_listen: fleetspeak_admin_listen
+      fleetspeak_admin_listen: fleetspeak_admin_listen,
+      csrf_secret_key: SecureRandom.base64(48)
     )
-    # grr_config_updater initialize también escribe en este mismo fichero
-    # (claves criptográficas, etc). Si necesitas regenerarlo desde cero,
-    # bórralo a mano antes de reconverger.
-    action :create_if_missing
-  end
-
-  config_updater_bin = new_resource.config_updater_bin
-
-  execute 'grr_config_updater_initialize' do
-    command <<-EOH
-      set -e
-      #{config_updater_bin} initialize \
-        --noprompt \
-        --config=#{server_local_yaml} \
-        --mysql_hostname=#{mysql_host} \
-        --mysql_port=#{mysql_port} \
-        --mysql_db=#{grr_database} \
-        --mysql_fleetspeak_db=#{fleetspeak_database} \
-        --mysql_username=#{grr_db_user} \
-        --mysql_password=#{grr_db_password} \
-        --external_hostname=#{hostname} \
-        --admin_password=#{admin_password}
-    EOH
-    not_if "grep -q 'PrivateKeys.server_key' #{server_local_yaml}"
+    action :create
   end
 
   admin_password = new_resource.admin_password
   admin_username = new_resource.admin_username
   server_local_yaml = new_resource.server_local_yaml
+  config_updater_bin =new_resource.config_updater_bin
 
-  # ASUNCIÓN: add_user pide la contraseña dos veces por stdin. Verifícalo
-  # con --helpfull en tu build concreto y ajusta si hace falta.
   execute 'grr_add_admin_user' do
     command <<-EOH
       #{config_updater_bin} --config=#{server_local_yaml} \
@@ -297,27 +253,27 @@ def install_grr
 end
 
 def start_services
-  fleetspeak_dir     = new_resource.fleetspeak_dir
-  server_local_yaml  = new_resource.server_local_yaml
-  grr_listen_host, grr_listen_port = new_resource.fleetspeak_grr_listen.split(':')
-
   service 'grr-fleetspeak' do
     action [:enable, :start]
-    subscribes :restart, "template[#{fleetspeak_dir}/server.components.config]", :delayed
-    subscribes :restart, "template[#{fleetspeak_dir}/server.services.config]", :delayed
   end
 
-  execute 'wait_for_fleetspeak_ready' do
-    command "nc -z #{grr_listen_host} #{grr_listen_port}"
-    retries 10
-    retry_delay 2
+  ruby_block 'wait_for_fleetspeak' do
+    block { sleep 5 }
     action :run
   end
 
-  %w(grr-adminui grr-frontend grr-worker).each do |svc|
+  service 'grr-adminui' do
+    action [:enable, :start]
+  end
+
+  ruby_block 'wait_for_adminui_schema' do
+    block { sleep 10 }
+    action :run
+  end
+
+  %w(grr-frontend grr-worker).each do |svc|
     service svc do
       action [:enable, :start]
-      subscribes :restart, "template[#{server_local_yaml}]", :delayed
     end
   end
 end
@@ -340,8 +296,6 @@ def drop_databases
       mariadb -e "DROP USER IF EXISTS '#{new_resource.fleetspeak_db_user}'@'localhost';"
       mariadb -e "FLUSH PRIVILEGES;"
     EOH
-    # Si mariadb ya no está ni instalado ni arrancado (p.ej. remove
-    # ejecutado dos veces seguidas), no hay nada que borrar.
     only_if 'command -v mariadb && systemctl is-active --quiet mariadb'
   end
 end
@@ -351,6 +305,7 @@ end
 def grr_consul_services
   adminui_port = new_resource.adminui_port
   frontend_port = new_resource.frontend_port
+  fleetspeak_port = new_resource.fleetspeak_port
 
   [
     {
@@ -364,6 +319,12 @@ def grr_consul_services
       id: "grr-frontend-#{node['hostname']}",
       name: 'grr-frontend',
       port: frontend_port
+    },
+    {
+      key: 'fleetspeak',
+      id: "grr-fleetspeak-#{node['hostname']}",
+      name: 'grr-fleetspeak',
+      port: fleetspeak_port
     }
   ]
 end

@@ -19,11 +19,11 @@ attribute :fleetspeak_db_user,              kind_of: String,  default: 'fleetspe
 attribute :fleetspeak_db_password,          kind_of: String,  default: 'redborder'
 
 # --- GRR / Fleetspeak ----------------------------------------------------
-attribute :hostname,                        kind_of: String,  default: 'grr-server.redborder.cluster'
+attribute :hostname,                        kind_of: String,  default: 'grr-adminui.redborder.cluster'
 attribute :adminui_port,                    kind_of: Integer, default: 8002
-attribute :adminui_url,                     kind_of: String,  default: 'https://grr-server.redborder.cluster:8002'
+attribute :adminui_url,                     kind_of: String,  default: 'http://grr-adminui.redborder.cluster:8002'
 attribute :frontend_port,                   kind_of: Integer, default: 8084
-attribute :frontend_url,                    kind_of: String,  default: 'https://grr-server.redborder.cluster:8084'
+attribute :frontend_url,                    kind_of: String,  default: 'http://grr-adminui.redborder.cluster:8084'
 attribute :fleetspeak_port,                 kind_of: Integer, default: 8443
 
 attribute :fleetspeak_https_listen,         kind_of: String, default: '0.0.0.0:8443'
@@ -35,6 +35,7 @@ attribute :admin_username,                  kind_of: String,  default: 'admin'
 attribute :admin_password,                  kind_of: String,  default: 'redborder'
 
 attribute :config_dir,                      kind_of: String,  default: '/opt/grr'
+attribute :install_data_dir,                kind_of: String,  default: '/opt/grr/venv/install_data'
 attribute :server_local_yaml,               kind_of: String,  default: '/opt/grr/venv/install_data/etc/server.local.yaml'
 attribute :fleetspeak_dir,                  kind_of: String,  default: '/opt/grr/venv/fleetspeak-server-bin/etc/fleetspeak-server'
 attribute :config_updater_bin,              kind_of: String,  default: '/opt/grr/venv/bin/grr_config_updater'
