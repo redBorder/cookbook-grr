@@ -76,6 +76,7 @@ def configure_mariadb
   end
 
   execute 'setup_mariadb_databases_and_user' do
+    sensitive true
     command <<-EOH
       set -e
       mariadb -e "CREATE USER IF NOT EXISTS '#{grr_db_user}'@'localhost' IDENTIFIED BY '#{grr_db_password}';"
@@ -90,6 +91,7 @@ def configure_mariadb
   end
 
   execute 'secure_mariadb_installation' do
+    sensitive true
     command <<-EOH
       set -e
       mariadb -e "DELETE FROM mysql.user WHERE User='';"
@@ -126,6 +128,7 @@ def configure_fleetspeak
   key_file  = "#{fleetspeak_cert_dir}/server-key.pem"
 
   execute 'generate_fleetspeak_selfsigned_cert' do
+    sensitive true
     command <<-EOH
       set -e
       openssl req -x509 -nodes -newkey rsa:4096 -days 3650 \
@@ -152,6 +155,7 @@ def configure_fleetspeak
     owner 'root'
     group 'root'
     mode '0640'
+    sensitive true
     variables lazy {
       {
         mysql_dsn: "#{fleetspeak_db_user}:#{fleetspeak_db_password}" \
@@ -207,6 +211,7 @@ def install_grr
     owner 'root'
     group 'root'
     mode '0640'
+    sensitive true
     variables(
       mysql_host: mysql_host,
       mysql_port: mysql_port,
@@ -230,6 +235,7 @@ def install_grr
   config_updater_bin = new_resource.config_updater_bin
 
   execute 'grr_add_admin_user' do
+    sensitive true
     command <<-EOH
       #{config_updater_bin} --config=#{server_local_yaml} \
         add_user #{admin_username} \
@@ -279,6 +285,7 @@ end
 
 def drop_databases
   execute 'drop_grr_databases_and_users' do
+    sensitive true
     command <<-EOH
       set -e
       mariadb -e "DROP DATABASE IF EXISTS #{new_resource.grr_database};"
