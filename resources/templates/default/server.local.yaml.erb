@@ -21,3 +21,21 @@ Client.fleetspeak_enabled: true
 Server.fleetspeak_message_listen_address: "<%= @fleetspeak_grr_listen %>"
 Server.fleetspeak_server: "<%= @fleetspeak_admin_listen %>"
 Server.initialized: True
+
+CA.certificate: |
+<%= @ca_certificate.strip.each_line.map { |l| "  #{l}" }.join %>
+
+PrivateKeys.ca_key: |
+<%= @ca_key.strip.each_line.map { |l| "  #{l}" }.join %>
+
+Frontend.certificate: |
+<%= @server_certificate.strip.each_line.map { |l| "  #{l}" }.join %>
+
+PrivateKeys.server_key: |
+<%= @server_key.strip.each_line.map { |l| "  #{l}" }.join %>
+
+Client.executable_signing_public_key: |
+<%= @executable_signing_public_key.strip.each_line.map { |l| "  #{l}" }.join %>
+
+PrivateKeys.executable_signing_private_key: |
+<%= @executable_signing_private_key.strip.each_line.map { |l| "  #{l}" }.join %>

@@ -1,7 +1,16 @@
 # Cookbook:: grr
 # Provider:: config
 
+require 'securerandom'
+require 'json'
+require 'fileutils'
+require 'tmpdir'
+
 include Grr::Helper
+include Chef::Mixin::ShellOut
+
+CERTS_DATABAG_DIR = '/var/chef/data/data_bag_encrypted/certs'.freeze
+CERTS_DATABAG_FILE = "#{CERTS_DATABAG_DIR}/grr.json".freeze
 
 action :add do
   configure_mariadb
@@ -32,6 +41,8 @@ action :remove do
     recursive true
     action :delete
   end
+
+  delete_grr_certs
 end
 
 action :register do
@@ -47,18 +58,91 @@ end
 # ----------------
 private
 
+# ----------------------------------------------------------------
+# GRR Certificates
+# ----------------------------------------------------------------
+def grr_certs
+  return @grr_certs if @grr_certs
+
+  existing = new_resource.grr_certs
+
+  @grr_certs =
+    if existing.nil? || existing.empty?
+      Chef::Log.info('grr_config: no se encontró data bag certs/grr_conf, generando certificados nuevos')
+      generate_grr_certs
+    else
+      Chef::Log.info('grr_config: usando certificados existentes del data bag certs/grr_conf')
+      existing
+    end
+end
+
+def generate_grr_certs
+  hostname = new_resource.hostname
+  dir = Dir.mktmpdir('grr_certs')
+
+  begin
+    shell_out!("openssl genrsa -out #{dir}/ca.key 2048")
+    shell_out!(
+      "openssl req -x509 -new -nodes -key #{dir}/ca.key -sha256 -days 3650 " \
+      "-subj '/CN=grr_test/C=US' -out #{dir}/ca.crt"
+    )
+
+    shell_out!("openssl genrsa -out #{dir}/server.key 2048")
+    shell_out!(
+      "openssl req -new -key #{dir}/server.key -subj '/CN=#{hostname}' -out #{dir}/server.csr"
+    )
+    shell_out!(
+      "openssl x509 -req -in #{dir}/server.csr -CA #{dir}/ca.crt -CAkey #{dir}/ca.key " \
+      "-CAcreateserial -out #{dir}/server.crt -days 3650 -sha256"
+    )
+
+    shell_out!("openssl genrsa -out #{dir}/exec_signing.key 2048")
+    shell_out!("openssl rsa -in #{dir}/exec_signing.key -pubout -out #{dir}/exec_signing.pub")
+
+    certs = {
+      'id'                             => 'grr_conf',
+      'ca_certificate'                 => ::File.read("#{dir}/ca.crt"),
+      'ca_key'                         => ::File.read("#{dir}/ca.key"),
+      'server_certificate'             => ::File.read("#{dir}/server.crt"),
+      'server_key'                     => ::File.read("#{dir}/server.key"),
+      'executable_signing_public_key'  => ::File.read("#{dir}/exec_signing.pub"),
+      'executable_signing_private_key' => ::File.read("#{dir}/exec_signing.key"),
+      'csrf_secret_key'                => SecureRandom.base64(48),
+    }
+
+    persist_grr_certs(certs)
+    certs
+  ensure
+    FileUtils.remove_entry(dir) if ::Dir.exist?(dir)
+  end
+end
+
+def persist_grr_certs(certs)
+  FileUtils.mkdir_p(CERTS_DATABAG_DIR)
+  ::File.write(CERTS_DATABAG_FILE, JSON.pretty_generate(certs))
+  ::File.chmod(0o600, CERTS_DATABAG_FILE)
+
+  shell_out!(
+    "knife data bag from file certs #{CERTS_DATABAG_FILE} " \
+    '--secret-file /etc/chef/encrypted_data_bag_secret'
+  )
+ensure
+  ::File.delete(CERTS_DATABAG_FILE) if ::File.exist?(CERTS_DATABAG_FILE)
+end
+
 def configure_mariadb
   package %w(mariadb-server mariadb-connector-c-devel) do
     action :install
   end
 
   max_allowed_packet = new_resource.max_allowed_packet
-  grr_db_user = new_resource.grr_db_user
-  grr_db_password = new_resource.grr_db_password
+  grr_secrets = new_resource.grr_secrets
+  grr_db_user = grr_secrets['grr_db_user'] unless grr_secrets.empty?
+  grr_db_password = grr_secrets['grr_db_password'] unless grr_secrets.empty?
   grr_database = new_resource.grr_database
   fleetspeak_database = new_resource.fleetspeak_database
-  fleetspeak_db_user = new_resource.fleetspeak_db_user
-  fleetspeak_db_password = new_resource.fleetspeak_db_password
+  fleetspeak_db_user = grr_secrets['fleetspeak_db_user'] unless grr_secrets.empty?
+  fleetspeak_db_password = grr_secrets['fleetspeak_db_password'] unless grr_secrets.empty?
   log_bin_trust_function_creators = new_resource.log_bin_trust_function_creators
 
   template '/etc/my.cnf.d/grr.cnf' do
@@ -108,8 +192,9 @@ def configure_fleetspeak
   fleetspeak_cert_dir = new_resource.fleetspeak_cert_dir
   fleetspeak_dir = new_resource.fleetspeak_dir
   hostname = new_resource.hostname
-  fleetspeak_db_user = new_resource.fleetspeak_db_user
-  fleetspeak_db_password = new_resource.fleetspeak_db_password
+  grr_secrets = new_resource.grr_secrets
+  fleetspeak_db_user = grr_secrets['fleetspeak_db_user'] unless grr_secrets.empty?
+  fleetspeak_db_password = grr_secrets['fleetspeak_db_password'] unless grr_secrets.empty?
   mysql_host = new_resource.mysql_host
   mysql_port = new_resource.mysql_port
   fleetspeak_database = new_resource.fleetspeak_database
@@ -189,14 +274,16 @@ def install_grr
   mysql_host = new_resource.mysql_host
   mysql_port = new_resource.mysql_port
   grr_database = new_resource.grr_database
-  grr_db_user = new_resource.grr_db_user
-  grr_db_password = new_resource.grr_db_password
+  grr_secrets = new_resource.grr_secrets
+  grr_db_user = grr_secrets['grr_db_user'] unless grr_secrets.empty?
+  grr_db_password = grr_secrets['grr_db_password'] unless grr_secrets.empty?
   adminui_url = new_resource.adminui_url
   adminui_port = new_resource.adminui_port
   frontend_port = new_resource.frontend_port
   frontend_url = new_resource.frontend_url
   fleetspeak_grr_listen = new_resource.fleetspeak_grr_listen
   fleetspeak_admin_listen = new_resource.fleetspeak_admin_listen
+  certs = grr_certs
 
   directory config_dir do
     owner 'root'
@@ -224,13 +311,20 @@ def install_grr
       frontend_url: frontend_url,
       fleetspeak_grr_listen: fleetspeak_grr_listen,
       fleetspeak_admin_listen: fleetspeak_admin_listen,
-      csrf_secret_key: SecureRandom.base64(48)
+      ca_certificate: certs['ca_certificate'],
+      ca_key: certs['ca_key'],
+      server_certificate: certs['server_certificate'],
+      server_key: certs['server_key'],
+      executable_signing_public_key: certs['executable_signing_public_key'],
+      executable_signing_private_key: certs['executable_signing_private_key'],
+      csrf_secret_key: certs['csrf_secret_key']
     )
     action :create
   end
 
-  admin_password = new_resource.admin_password
-  admin_username = new_resource.admin_username
+  grr_secrets = new_resource.grr_secrets
+  admin_username = grr_secrets['admin_username'] unless grr_secrets.empty?
+  admin_password = grr_secrets['admin_password'] unless grr_secrets.empty?
   server_local_yaml = new_resource.server_local_yaml
   config_updater_bin = new_resource.config_updater_bin
 
@@ -295,6 +389,20 @@ def drop_databases
       mariadb -e "FLUSH PRIVILEGES;"
     EOH
     only_if 'command -v mariadb && systemctl is-active --quiet mariadb'
+  end
+end
+
+def delete_grr_certs
+  # Item local (el que escribe persist_grr_certs)
+  file CERTS_DATABAG_FILE do
+    action :delete
+  end
+
+  # Item en el Chef Server (solo si lo subiste con knife)
+  execute 'delete_grr_conf_data_bag_item' do
+    command 'knife data bag delete certs grr_conf -y'
+    only_if 'knife data bag show certs grr_conf --secret-file /etc/chef/encrypted_data_bag_secret >/dev/null 2>&1'
+    ignore_failure true
   end
 end
 

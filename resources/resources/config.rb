@@ -23,7 +23,7 @@ attribute :fleetspeak_db_password,          kind_of: String,  default: 'redborde
 # --- GRR / Fleetspeak ----------------------------------------------------
 attribute :hostname,                        kind_of: String,  default: lazy { "grr-adminui.#{node['redborder']['cdomain']}" }
 attribute :adminui_port,                    kind_of: Integer, default: 8002
-attribute :adminui_url,                     kind_of: String,  default: lazy { "http://grr-adminui.#{node['redborder']['cdomain']}:8002" }
+attribute :adminui_url,                     kind_of: String,  default: lazy { "https://grr-adminui.#{node['redborder']['cdomain']}:8002" }
 attribute :frontend_port,                   kind_of: Integer, default: 8084
 attribute :frontend_url,                    kind_of: String,  default: lazy { "http://grr-adminui.#{node['redborder']['cdomain']}:8084" }
 attribute :fleetspeak_port,                 kind_of: Integer, default: 8443
@@ -33,11 +33,13 @@ attribute :fleetspeak_admin_listen,         kind_of: String, default: 'localhost
 attribute :fleetspeak_grr_listen,           kind_of: String, default: 'localhost:1138'
 attribute :fleetspeak_cert_dir,             kind_of: String, default: '/opt/grr/venv/fleetspeak-server-bin/etc/fleetspeak-server'
 
-attribute :admin_username,                  kind_of: String,  default: 'admin'
-attribute :admin_password,                  kind_of: String,  default: 'redborder'
-
 attribute :config_dir,                      kind_of: String,  default: '/opt/grr'
 attribute :install_data_dir,                kind_of: String,  default: '/opt/grr/venv/install_data'
 attribute :server_local_yaml,               kind_of: String,  default: '/opt/grr/venv/install_data/etc/server.local.yaml'
 attribute :fleetspeak_dir,                  kind_of: String,  default: '/opt/grr/venv/fleetspeak-server-bin/etc/fleetspeak-server'
 attribute :config_updater_bin,              kind_of: String,  default: '/opt/grr/venv/bin/grr_config_updater'
+attribute :admin_username,                  kind_of: String
+attribute :admin_password,                  kind_of: String
+
+attribute :grr_secrets, kind_of: Hash, default: {}
+attribute :grr_certs, kind_of: Hash, default: {}
