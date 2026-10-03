@@ -1,6 +1,11 @@
 cookbook-grr CHANGELOG
 ===============
 
+## 0.0.2
+
+  - manegron
+    - [62e2f88] Upload cookbook only if opscode-erchef is active
+
 ## 0.0.1
 
   - Vimesa
