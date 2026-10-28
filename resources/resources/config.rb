@@ -43,3 +43,6 @@ attribute :admin_password,                  kind_of: String
 
 attribute :grr_secrets, kind_of: Hash, default: {}
 attribute :grr_certs, kind_of: Hash, default: {}
+
+attribute :grr_adminui_hosts, kind_of: Array
+attribute :grr_fleetspeak_hosts, kind_of: Array

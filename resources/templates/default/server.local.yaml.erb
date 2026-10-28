@@ -22,20 +22,30 @@ Server.fleetspeak_message_listen_address: "<%= @fleetspeak_grr_listen %>"
 Server.fleetspeak_server: "<%= @fleetspeak_admin_listen %>"
 Server.initialized: True
 
+ClientBuilder.fleetspeak_bundled: True
+
+Target:Linux:
+  ClientBuilder.fleetspeak_client_config: <%= @fleetspeak_client_config %>
+  Client.labels: "%(/etc/grr_labels|optionalfile)"
+
+Target:Windows:
+  ClientBuilder.fleetspeak_client_config: <%= @fleetspeak_client_config_windows %>
+  Client.labels: "%(C:/ProgramData/GRR/grr_labels|optionalfile)"
+
 CA.certificate: |
-<%= @ca_certificate.strip.each_line.map { |l| "  #{l}" }.join %>
+<%= @ca_certificate.each_line.map { |l| "  #{l.strip}" }.join("\n") %>
 
 PrivateKeys.ca_key: |
-<%= @ca_key.strip.each_line.map { |l| "  #{l}" }.join %>
+<%= @ca_key.each_line.map { |l| "  #{l.strip}" }.join("\n") %>
 
 Frontend.certificate: |
-<%= @server_certificate.strip.each_line.map { |l| "  #{l}" }.join %>
+<%= @server_certificate.each_line.map { |l| "  #{l.strip}" }.join("\n") %>
 
 PrivateKeys.server_key: |
-<%= @server_key.strip.each_line.map { |l| "  #{l}" }.join %>
+<%= @server_key.each_line.map { |l| "  #{l.strip}" }.join("\n") %>
 
 Client.executable_signing_public_key: |
-<%= @executable_signing_public_key.strip.each_line.map { |l| "  #{l}" }.join %>
+<%= @executable_signing_public_key.each_line.map { |l| "  #{l.strip}" }.join("\n") %>
 
 PrivateKeys.executable_signing_private_key: |
-<%= @executable_signing_private_key.strip.each_line.map { |l| "  #{l}" }.join %>
+<%= @executable_signing_private_key.each_line.map { |l| "  #{l.strip}" }.join("\n") %>
