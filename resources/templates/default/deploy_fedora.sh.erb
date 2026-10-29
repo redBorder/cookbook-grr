@@ -1,0 +1,447 @@
+#!/bin/bash
+#
+# deploy_fedora.sh - Installs (or updates) the GRR client on Fedora/RHEL/Rocky,
+# sets its tag, and registers the GRR server in /etc/hosts.
+#
+# Command-line usage:
+#   sudo ./deploy_fedora.sh -l <label> [-i <IP> -n <domain_name>] [-y]
+#   If -i or -n is not specified, the values used to generate this script are used.
+#
+# Options:
+#   -l, --label NAME      Label
+#   -i, --server-ip IP      IP (v4 or v6) of the GRR server.
+#   -n, --server-name FQDN  GRR server name with its domain.
+#   -r, --rpm FILE       Installer. By default, the .rpm file next to this script.
+#       --no-hosts          Do not modify /etc/hosts.
+#   -y, --yes               Do not prompt for confirmation.
+#       --force             Restart the client even if there are no changes.
+#   -h, --help              This help message.
+#
+set -euo pipefail
+
+LABEL_FILE="${GRR_LABEL_FILE:-/etc/grr_labels}"
+HOSTS_FILE="${GRR_HOSTS_FILE:-/etc/hosts}"
+SERVICE="${GRR_SERVICE:-fleetspeak-client}"
+WAIT_SECONDS="${GRR_WAIT_SECONDS:-30}"
+SERVER_PORT="${GRR_SERVER_PORT:-8443}"
+
+# GRR Server
+DEFAULT_SERVER_IP='<%= @server_ip %>'
+DEFAULT_SERVER_NAME='<%= @server_name %>'
+
+HOSTS_BEGIN="# BEGIN GRR-CLIENT (managed by GRR, do not edit)"
+HOSTS_END="# END GRR-CLIENT"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+LABEL=""
+LABEL_GIVEN=0
+SERVER_IP=""
+SERVER_NAMES_RAW=""
+RPM=""
+FORCE=0
+ASSUME_YES=0
+SKIP_HOSTS=0
+SERVER_NAMES=()
+
+INTERACTIVE=0
+[[ -t 0 ]] && INTERACTIVE=1
+
+TMP_FILES=()
+cleanup() {
+  local f
+  for f in "${TMP_FILES[@]:-}"; do
+    [[ -n "$f" ]] && rm -f "$f"
+  done
+  return 0
+}
+trap cleanup EXIT
+
+usage() {
+  sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2
+  exit "${1:-1}"
+}
+
+die()  { echo "Error: $*" >&2; exit 1; }
+warn() { echo "Warning: $*" >&2; }
+
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+# ask VARIABLE "Question" [default-value]
+ask() {
+  local __var="$1" prompt="$2" def="${3:-}" ans=""
+  if [[ -n "$def" ]]; then
+    read -r -p "$prompt [$def]: " ans || true
+    ans="${ans:-$def}"
+  else
+    read -r -p "$prompt: " ans || true
+  fi
+  printf -v "$__var" '%s' "$(trim "$ans")"
+}
+
+# ---------------------------------------------------------------- validation
+
+valid_ipv4() {
+  local o
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  for o in "${BASH_REMATCH[@]:1}"; do
+    (( 10#$o <= 255 )) || return 1
+  done
+}
+
+valid_ipv6() {
+  [[ "$1" == *:* && "$1" != *:::* && "$1" =~ ^[0-9A-Fa-f:]+(\.[0-9]{1,3}){0,3}$ ]]
+}
+
+valid_ip() { valid_ipv4 "$1" || valid_ipv6 "$1"; }
+
+valid_hostname() {
+  local h="$1"
+  (( ${#h} <= 253 )) || return 1
+  [[ "$h" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]
+}
+
+validate_label() {
+  [[ -n "$LABEL" ]] || return 0
+  [[ "$LABEL" != *,* ]] || die "Invalid label: It cannot contain commas."
+  [[ ! "$LABEL" =~ [[:cntrl:]] ]] || die "Invalid label: It cannot contain line breaks or control characters."
+  (( ${#LABEL} <= 128 )) || die "Label is too long (maximum 128 characters)."
+}
+
+validate_server() {
+  local n
+  [[ -n "$SERVER_IP" ]] || die "The GRR server's IP address is missing (-i)."
+  valid_ip "$SERVER_IP" || die "Invalid IP address: '$SERVER_IP'."
+
+  read -r -a SERVER_NAMES <<< "${SERVER_NAMES_RAW//,/ }"
+  (( ${#SERVER_NAMES[@]} > 0 )) || die "The GRR server name is missing (-n)."
+  for n in "${SERVER_NAMES[@]}"; do
+    valid_hostname "$n" || die "Invalid hostname: '$n'."
+    [[ "$n" == *.* ]] || warn "'$n' It does not have a domain name; a name of the form host.domain was expected."
+  done
+}
+
+# ---------------------------------------------------------------- arguments
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -l|--label)       [[ $# -ge 2 ]] || usage; LABEL="$2"; LABEL_GIVEN=1; shift 2 ;;
+    -i|--server-ip)   [[ $# -ge 2 ]] || usage; SERVER_IP="$2";        shift 2 ;;
+    -n|--server-name) [[ $# -ge 2 ]] || usage; SERVER_NAMES_RAW="$2"; shift 2 ;;
+    -r|--rpm)         [[ $# -ge 2 ]] || usage; RPM="$2";              shift 2 ;;
+    --no-hosts)       SKIP_HOSTS=1; shift ;;
+    -y|--yes)         ASSUME_YES=1; shift ;;
+    --force)          FORCE=1; shift ;;
+    -h|--help)        usage 0 ;;
+    *) echo "Unknown option: $1" >&2; usage ;;
+  esac
+done
+
+LABEL="$(trim "$LABEL")"
+SERVER_IP="$(trim "$SERVER_IP")"
+SERVER_NAMES_RAW="$(trim "$SERVER_NAMES_RAW")"
+
+[[ $EUID -eq 0 ]] || die "Run this script as root (sudo)."
+
+# ------------------------------------------------- current values (default)
+
+current_label() {
+  [[ -f "$LABEL_FILE" ]] && head -n1 "$LABEL_FILE" | tr -d '\r' || true
+}
+
+# First line of the managed block in /etc/hosts: “IP name [name...]”
+current_hosts_entry() {
+  [[ -f "$HOSTS_FILE" ]] || return 0
+  awk -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" '
+    $0 == b { blk = 1; next }
+    $0 == e { blk = 0 }
+    blk && $1 !~ /^#/ && NF >= 2 { print; exit }
+  ' "$HOSTS_FILE"
+}
+
+# Server defaults: those from the template, and if none exist, whatever
+# is already in /etc/hosts on this machine. Fill in DEF_IP and DEF_NAMES.
+compute_server_defaults() {
+  local entry
+  DEF_IP="$(trim "$DEFAULT_SERVER_IP")"
+  DEF_NAMES="$(trim "$DEFAULT_SERVER_NAME")"
+  if [[ -z "$DEF_IP" || -z "$DEF_NAMES" ]]; then
+    entry="$(current_hosts_entry)"
+    [[ -z "$DEF_IP" ]] && DEF_IP="${entry%% *}"
+    if [[ -z "$DEF_NAMES" && "$entry" == *" "* ]]; then
+      DEF_NAMES="${entry#* }"
+    fi
+  fi
+  return 0
+}
+
+# --------------------------------------------------------- installer (.rpm)
+
+find_rpms() {
+  local dir
+  for dir in "$SCRIPT_DIR" "$PWD"; do
+    mapfile -t FOUND_RPMS < <(find "$dir" -maxdepth 1 -type f -name '*.rpm' 2>/dev/null | sort)
+    (( ${#FOUND_RPMS[@]} > 0 )) && return 0
+    [[ "$PWD" == "$SCRIPT_DIR" ]] && break
+  done
+  FOUND_RPMS=()
+}
+
+choose_rpm() {
+  local i choice
+  find_rpms
+  case ${#FOUND_RPMS[@]} in
+    0) RPM="" ;;
+    1) RPM="${FOUND_RPMS[0]}" ;;
+    *)
+      if (( INTERACTIVE )); then
+        echo "There are multiple installers:"
+        for i in "${!FOUND_RPMS[@]}"; do
+          printf '  %d) %s\n' "$((i + 1))" "$(basename "${FOUND_RPMS[$i]}")"
+        done
+        ask choice "Installer number to use" "1"
+        [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#FOUND_RPMS[@]} )) \
+          || die "Invalid option: '$choice'."
+        RPM="${FOUND_RPMS[$((choice - 1))]}"
+      else
+        printf 'Installers found:\n' >&2
+        printf '  %s\n' "${FOUND_RPMS[@]}" >&2
+        die "There are several .rpm files; specify which one with --rpm."
+      fi
+      ;;
+  esac
+}
+
+RPM_LABEL=""
+if [[ -n "$RPM" ]]; then
+  [[ -f "$RPM" ]] || die "The installer does not exist: $RPM"
+else
+  choose_rpm
+fi
+if [[ -n "$RPM" ]]; then
+  command -v rpm >/dev/null 2>&1 || die "This script requires RPM (Fedora/RHEL/Rocky)."
+  RPM_LABEL="$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}' "$RPM" 2>/dev/null)" \
+    || die "This is not a valid RPM package: $RPM"
+fi
+
+# --------------------------------------------------------------- questions
+
+compute_server_defaults
+
+if (( INTERACTIVE )); then
+  if (( ! LABEL_GIVEN )); then
+    echo "Label: Location where this equipment is located."
+    echo "Press Enter to leave it blank (the system will use the default sensor)."
+    cur_label="$(current_label)"
+    [[ -z "$cur_label" ]] || echo "Current label on this device: $cur_label"
+    ask LABEL "Label" ""
+  fi
+
+  if (( ! SKIP_HOSTS )) && [[ -z "$SERVER_IP" || -z "$SERVER_NAMES_RAW" ]]; then
+    echo "GRR Server: It will be added to $HOSTS_FILE so that this computer can resolve it."
+    echo "Press Enter to accept the value in brackets, or type another value to replace it."
+    [[ -z "$SERVER_IP" ]]        && ask SERVER_IP "GRR server IP address" "$DEF_IP"
+    [[ -z "$SERVER_NAMES_RAW" ]] && ask SERVER_NAMES_RAW "Name with GRR server domain" "$DEF_NAMES"
+  fi
+fi
+
+# If there is no terminal, no prompt is displayed: the values from the template (or the existing
+# configuration) are used, and if no label is specified, the one already assigned to the device is used.
+if (( ! INTERACTIVE )); then
+  (( LABEL_GIVEN )) || LABEL="$(current_label)"
+  if (( ! SKIP_HOSTS )); then
+    [[ -z "$SERVER_IP" ]]        && SERVER_IP="$DEF_IP"
+    [[ -z "$SERVER_NAMES_RAW" ]] && SERVER_NAMES_RAW="$DEF_NAMES"
+  fi
+fi
+
+LABEL="$(trim "$LABEL")"
+SERVER_IP="$(trim "$SERVER_IP")"
+SERVER_NAMES_RAW="$(trim "$SERVER_NAMES_RAW")"
+
+validate_label
+(( SKIP_HOSTS )) || validate_server
+
+# --------------------------------------------------------------- summary
+
+echo
+echo "The following will apply:"
+echo "  Label ........... ${LABEL:-(none)}"
+if (( SKIP_HOSTS )); then
+  echo "  /etc/hosts ...... no changes (--no-hosts)"
+else
+  echo "  GRR Server .... $SERVER_IP  ${SERVER_NAMES[*]}"
+fi
+if [[ -n "$RPM" ]]; then
+  echo "  Installer ...... $(basename "$RPM")  ($RPM_LABEL)"
+else
+  echo "  Installer ...... none (the installed client remains)"
+fi
+echo
+
+if (( INTERACTIVE && ! ASSUME_YES )); then
+  ans=""
+  read -r -p "Continue? [Y/n]: " ans || true
+  case "${ans,,}" in
+    ""|y|yes) ;;
+    *) echo "Canceled."; exit 0 ;;
+  esac
+fi
+
+CHANGED=$FORCE
+
+# ---------------------------------------------------------------- /etc/hosts
+
+restore_context() {
+  command -v restorecon >/dev/null 2>&1 && restorecon "$1" 2>/dev/null || true
+}
+
+warn_hosts_conflicts() {
+  local name line
+  for name in "${SERVER_NAMES[@]}"; do
+    line="$(awk -v n="$name" -v ip="$SERVER_IP" -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" '
+      $0 == b { blk = 1; next }
+      $0 == e { blk = 0; next }
+      blk || /^[[:space:]]*#/ { next }
+      { for (i = 2; i <= NF; i++) if (tolower($i) == tolower(n) && $1 != ip) { print; exit } }
+    ' "$HOSTS_FILE")"
+    if [[ -n "$line" ]]; then
+      warn "'$name' It already appears in $HOSTS_FILE with a different IP address: $line"
+      warn "The first entry in the file is the one that is used; review it or delete it manually."
+    fi
+  done
+}
+
+apply_hosts() {
+  local tmp
+  tmp="$(mktemp)"
+  TMP_FILES+=("$tmp")
+
+  [[ -f "$HOSTS_FILE" ]] || : > "$HOSTS_FILE"
+
+  awk -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" '
+    $0 == b { skip = 1; next }
+    $0 == e { skip = 0; next }
+    !skip
+  ' "$HOSTS_FILE" > "$tmp"
+
+  if [[ -s "$tmp" && -n "$(tail -c1 "$tmp")" ]]; then
+    echo >> "$tmp"
+  fi
+  {
+    echo "$HOSTS_BEGIN"
+    echo "$SERVER_IP ${SERVER_NAMES[*]}"
+    echo "$HOSTS_END"
+  } >> "$tmp"
+
+  if cmp -s "$tmp" "$HOSTS_FILE"; then
+    echo "$HOSTS_FILE It was already up to date: $SERVER_IP ${SERVER_NAMES[*]}"
+    return 0
+  fi
+
+  # Back up the first time it is modified.
+  [[ -e "$HOSTS_FILE.grr.bak" ]] || cp -p "$HOSTS_FILE" "$HOSTS_FILE.grr.bak"
+
+  # cat > preserves the inode (applies if /etc/hosts is a link or a mount).
+  cat "$tmp" > "$HOSTS_FILE"
+  restore_context "$HOSTS_FILE"
+  CHANGED=1
+  echo "$HOSTS_FILE updated: $SERVER_IP ${SERVER_NAMES[*]}"
+}
+
+verify_resolution() {
+  local name got
+  [[ "$HOSTS_FILE" == /etc/hosts ]] || return 0
+  for name in "${SERVER_NAMES[@]}"; do
+    got="$(getent hosts "$name" 2>/dev/null | awk '{print $1; exit}')"
+    if [[ -z "$got" ]]; then
+      warn "'$name' It cannot be resolved on this device."
+    elif [[ "$got" != "$SERVER_IP" ]]; then
+      warn "'$name' It resolves to $got and not to $SERVER_IP (there is another entry that takes precedence)."
+    fi
+  done
+}
+
+check_server_port() {
+  local shown="$SERVER_IP"
+  [[ "$SERVER_IP" == *:* ]] && shown="[$SERVER_IP]"
+  if timeout 3 bash -c ">/dev/tcp/${SERVER_IP}/${SERVER_PORT}" 2>/dev/null; then
+    echo "GRR Server accessible at ${shown}:${SERVER_PORT}."
+  else
+    warn "Unable to connect to ${shown}:${SERVER_PORT}. Check the network and firewall; the client will try again."
+  fi
+}
+
+if (( ! SKIP_HOSTS )); then
+  [[ -f "$HOSTS_FILE" ]] && warn_hosts_conflicts
+  apply_hosts
+  verify_resolution
+fi
+
+# ------------------------------------------------------------------ label
+
+if [[ -z "$LABEL" ]]; then
+  if [[ -e "$LABEL_FILE" ]]; then
+    rm -f "$LABEL_FILE"
+    CHANGED=1
+    echo "Label deleted: it has been removed $LABEL_FILE"
+  else
+    echo "No label: there's nothing to write in $LABEL_FILE"
+  fi
+else
+  tmp="$(mktemp "${LABEL_FILE}.XXXXXX")"
+  TMP_FILES+=("$tmp")
+  printf '%s\n' "$LABEL" > "$tmp"
+  chmod 0644 "$tmp"
+
+  if [[ -f "$LABEL_FILE" ]] && cmp -s "$tmp" "$LABEL_FILE"; then
+    echo "The '$LABEL' tag was already in $LABEL_FILE"
+  else
+    mv -f "$tmp" "$LABEL_FILE"
+    CHANGED=1
+    echo "'$LABEL' label written in $LABEL_FILE"
+  fi
+  restore_context "$LABEL_FILE"
+fi
+
+# --------------------------------------------------------------- installation
+# --replacepkgs allows you to reinstall the same version.
+if [[ -n "$RPM" ]]; then
+  rpm -U --replacepkgs "$RPM"
+  CHANGED=1
+fi
+
+# ------------------------------------------------------------------ service
+if ! systemctl cat "$SERVICE" >/dev/null 2>&1; then
+  die "The $SERVICE service does not exist. Install the client first: copy the .rpm file next to this script or use --rpm."
+fi
+systemctl enable "$SERVICE" >/dev/null 2>&1 || true
+
+# Restart only if something has changed (the label is read when the client starts up).
+if (( CHANGED )); then
+  systemctl restart "$SERVICE"
+elif ! systemctl is-active --quiet "$SERVICE"; then
+  systemctl start "$SERVICE"
+fi
+
+# Wait until it becomes active.
+for (( i = 0; i < WAIT_SECONDS; i++ )); do
+  if systemctl is-active --quiet "$SERVICE"; then
+    if [[ -n "$LABEL" ]]; then
+      echo "Active client with the label '$LABEL'."
+    else
+      echo "Active client, unlabeled."
+    fi
+    (( SKIP_HOSTS )) || check_server_port
+    exit 0
+  fi
+  sleep 1
+done
+
+echo "Error: the $SERVICE service is not active. Check: journalctl -u $SERVICE" >&2
+exit 1

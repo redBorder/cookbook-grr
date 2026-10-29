@@ -4,3 +4,5 @@ maintainer_email 'git@redborder.com'
 license          'AGPL-3.0'
 description      'Installs/Configures cookbook-grr'
 version          '0.0.2'
+
+unified_mode true
