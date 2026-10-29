@@ -554,7 +554,7 @@ def install_grr
   execute 'grr_publish_installers_initial' do
     command publish_cmd
     not_if { !Dir.glob("#{installers_dir}/*").empty? }
-    not_if  { !Dir.glob("#{publish_installers_dir}/*/*").empty? }
+    not_if { !Dir.glob("#{publish_installers_dir}/*/*").empty? }
   end
 end
 
