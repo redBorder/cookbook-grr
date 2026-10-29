@@ -111,7 +111,7 @@ def delete_databag_item(bag, id)
 
   execute "delete_data_bag_item_#{bag}_#{id}" do
     command "knife data bag delete #{bag} #{id} -y"
-    only_if "knife data bag show #{bag} #{id} >/dev/null 2>&1"
+    not_if "knife data bag show #{bag} #{id} >/dev/null 2>&1"
     ignore_failure true
   end
 end
@@ -152,7 +152,7 @@ def generate_grr_certs
       'server_key'                     => ::File.read("#{dir}/server.key"),
       'executable_signing_public_key'  => ::File.read("#{dir}/exec_signing.pub"),
       'executable_signing_private_key' => ::File.read("#{dir}/exec_signing.key"),
-      'csrf_secret_key'                => SecureRandom.base64(48)
+      'csrf_secret_key'                => SecureRandom.base64(48),
     }
   ensure
     FileUtils.remove_entry(dir) if ::Dir.exist?(dir)
@@ -172,7 +172,7 @@ def generate_grr_passwords
     'fleetspeak_db_user'     => 'fleetspeak',
     'fleetspeak_db_password' => SecureRandom.alphanumeric(32),
     'admin_username'         => 'admin',
-    'admin_password'         => SecureRandom.alphanumeric(32)
+    'admin_password'         => SecureRandom.alphanumeric(32),
   }
 end
 
@@ -421,7 +421,7 @@ def install_grr
 
   execute 'grr_install_windows_template' do
     command "cp -u #{client_templates_dir}/*.exe.zip #{templates_dir}/"
-    only_if { !Dir.glob("#{client_templates_dir}/*.exe.zip").empty? }
+    not_if { !Dir.glob("#{client_templates_dir}/*.exe.zip").empty? }
     not_if do
       Dir.glob("#{client_templates_dir}/*.exe.zip").all? do |f|
         ::File.exist?("#{templates_dir}/#{::File.basename(f)}")
@@ -553,7 +553,7 @@ def install_grr
 
   execute 'grr_publish_installers_initial' do
     command publish_cmd
-    only_if { !Dir.glob("#{installers_dir}/*").empty? }
+    not_if { !Dir.glob("#{installers_dir}/*").empty? }
     not_if  { !Dir.glob("#{publish_installers_dir}/*/*").empty? }
   end
 end
@@ -603,7 +603,7 @@ def drop_databases
       mariadb -e "DROP USER IF EXISTS '#{new_resource.fleetspeak_db_user}'@'localhost';"
       mariadb -e "FLUSH PRIVILEGES;"
     EOH
-    only_if 'command -v mariadb && systemctl is-active --quiet mariadb'
+    not_if 'command -v mariadb && systemctl is-active --quiet mariadb'
   end
 end
 
