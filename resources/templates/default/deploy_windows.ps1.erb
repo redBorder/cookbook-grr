@@ -1,46 +1,43 @@
 <#
 .SYNOPSIS
-  Instala (o actualiza) el cliente GRR en Windows, fija su etiqueta y registra
-  el servidor GRR en el fichero hosts.
+  Installs (or updates) the GRR client on Windows, sets its label and registers
+  the GRR server in the hosts file.
 
 .DESCRIPTION
-  El instalador (.msi) es el mismo para todas las sedes y se busca junto a este
-  script. La etiqueta se lee en cada arranque del cliente desde
-  C:\ProgramData\GRR\grr_labels (opcion Client.labels de la configuracion del
-  servidor, seccion Target:Windows) y el servidor la usa para decidir a que
-  sensor pertenece el endpoint: debe coincidir con el nombre del sensor (sin
-  importar mayusculas); si no coincide con ninguno, el endpoint va al sensor
-  por defecto.
+  The installer (.msi) is the same for all sites and is looked up next to this
+  script. The label is read on every client start from
+  C:\ProgramData\GRR\grr_labels
 
-  Sin parametros, el script pregunta lo que falte. Con parametros, no pregunta.
-  - Etiqueta: si se pulsa Enter queda vacia (el equipo va al sensor por defecto).
-  - IP y nombre del servidor GRR: se muestran entre corchetes los valores con
-    los que se ha generado este script; Enter los acepta y, si se escribe otro
-    valor, lo sustituye. Con parametros y sin -ServerIp / -ServerName se usan
-    esos mismos valores.
+  With no parameters, the script asks for whatever is missing. With parameters,
+  it does not ask.
+  - Label: if Enter is pressed it stays empty (the computer goes to the default sensor).
+  - GRR server IP and name: the values this script was generated with are shown
+    in square brackets; Enter accepts them and, if another value is typed, it
+    replaces them. With parameters and without -ServerIp / -ServerName, those
+    same values are used.
 
 .PARAMETER Label
-  Nombre del sensor al que pertenece el equipo. Con -Label '' se deja el equipo
-  sin etiqueta.
+  Location the computer belongs to. With -Label '' the computer is left
+  without a label.
 
 .PARAMETER ServerIp
-  IP (v4 o v6) del servidor GRR.
+  IP (v4 or v6) of the GRR server.
 
 .PARAMETER ServerName
-  Nombre del servidor GRR con su dominio. Se pueden indicar varios, separados
-  por comas.
+  Name of the GRR server with its domain. Several can be given, separated
+  by commas.
 
 .PARAMETER Msi
-  Ruta del instalador .msi. Si se omite, se usa el .msi que haya junto al script.
+  Path to the .msi installer. If omitted, the .msi found next to the script is used.
 
 .PARAMETER NoHosts
-  No modificar el fichero hosts.
+  Do not modify the hosts file.
 
 .PARAMETER Yes
-  No pedir confirmacion.
+  Do not ask for confirmation.
 
 .PARAMETER Force
-  Reinicia el cliente aunque no haya cambios.
+  Restart the client even if there are no changes.
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy_windows.ps1
@@ -66,9 +63,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# --- Configuracion --------------------------------------------------------------
+# --- Configuration --------------------------------------------------------------
 
-# Fichero de etiqueta: debe coincidir con Client.labels@Target:Windows del servidor.
+# Label file
 $LabelDir  = Join-Path $env:ProgramData 'GRR'
 $LabelFile = Join-Path $LabelDir 'grr_labels'
 $HostsFile = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
@@ -76,14 +73,14 @@ $HostsFile = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
 $ServerPort = 8443
 if ($env:GRR_SERVER_PORT) { $ServerPort = [int]$env:GRR_SERVER_PORT }
 
-$HostsBegin = '# BEGIN GRR-CLIENT (gestionado por deploy_windows.ps1, no editar)'
+$HostsBegin = '# BEGIN GRR-CLIENT (managed by GRR, do not edit)'
 $HostsEnd   = '# END GRR-CLIENT'
 
-# Servidor GRR con el que se ha generado este script (los rellena el servidor).
+# GRR server this script was generated with.
 $DefaultServerIp   = '<%= @server_ip %>'
 $DefaultServerName = '<%= @server_name %>'
 
-# --- Funciones ------------------------------------------------------------------
+# --- Functions ------------------------------------------------------------------
 
 function Fail([string]$Message) {
   Write-Host "Error: $Message" -ForegroundColor Red
@@ -112,7 +109,7 @@ function Test-ValidHostname([string]$Value) {
   return ($Value -match '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$')
 }
 
-# Lineas del fichero hosts que NO pertenecen a nuestro bloque.
+# Lines of the hosts file that do NOT belong to our block.
 function Get-HostsOutsideBlock([string[]]$Lines, [string]$Begin, [string]$End) {
   $out = New-Object Collections.Generic.List[string]
   $skip = $false
@@ -124,7 +121,7 @@ function Get-HostsOutsideBlock([string[]]$Lines, [string]$Begin, [string]$End) {
   return $out.ToArray()
 }
 
-# Primera entrada "IP nombre [nombre...]" del bloque gestionado, o $null.
+# First "IP name [name...]" entry of the managed block, or $null.
 function Get-HostsBlockEntry([string]$Path, [string]$Begin, [string]$End) {
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
   $inBlock = $false
@@ -139,7 +136,7 @@ function Get-HostsBlockEntry([string]$Path, [string]$Begin, [string]$End) {
   return $null
 }
 
-# Entradas fuera del bloque que usan alguno de los nombres con otra IP.
+# Entries outside the block that use any of the names with a different IP.
 function Get-HostsConflicts([string]$Path, [string]$Ip, [string[]]$Names, [string]$Begin, [string]$End) {
   if (-not (Test-Path -LiteralPath $Path)) { return @() }
   $found = New-Object Collections.Generic.List[string]
@@ -155,7 +152,7 @@ function Get-HostsConflicts([string]$Path, [string]$Ip, [string[]]$Names, [strin
   return $found.ToArray()
 }
 
-# Sustituye (o crea) nuestro bloque. Devuelve 'updated' o 'unchanged'.
+# Replaces (or creates) our block. Returns 'updated' or 'unchanged'.
 function Update-HostsBlock([string]$Path, [string]$Ip, [string[]]$Names, [string]$Begin, [string]$End) {
   $oldText = ''
   $lines = @()
@@ -173,7 +170,7 @@ function Update-HostsBlock([string]$Path, [string]$Ip, [string[]]$Names, [string
 
   if ($text -ceq $oldText) { return 'unchanged' }
 
-  # Copia de seguridad la primera vez que se modifica.
+  # Backup the first time it is modified.
   if ((Test-Path -LiteralPath $Path) -and -not (Test-Path -LiteralPath "$Path.grr.bak")) {
     Copy-Item -LiteralPath $Path -Destination "$Path.grr.bak"
   }
@@ -195,28 +192,28 @@ function Update-HostsBlock([string]$Path, [string]$Ip, [string[]]$Names, [string
 function Show-ServiceDiagnostics {
   param([string]$Name)
   Write-Host ''
-  Write-Host "--- Diagnostico del servicio '$Name' ---"
+  Write-Host "--- Diagnostics for service '$Name' ---"
   try {
     $wmi = Get-WmiObject Win32_Service -Filter "Name='$Name'"
     if ($wmi) {
-      Write-Host "Ejecutable : $($wmi.PathName)"
-      Write-Host "Cuenta     : $($wmi.StartName)"
-      Write-Host "Estado     : $($wmi.State) (codigo de salida $($wmi.ExitCode))"
-      # Config del cliente: en Windows debe usar registry_handler (no filesystem_handler con rutas /etc).
+      Write-Host "Executable : $($wmi.PathName)"
+      Write-Host "Account    : $($wmi.StartName)"
+      Write-Host "State      : $($wmi.State) (exit code $($wmi.ExitCode))"
+      # Client config: on Windows it must use registry_handler (not filesystem_handler with /etc paths).
       $cfg = $null; $logDir = $null
       if ($wmi.PathName -match '-config=("([^"]+)"|(\S+))') { $cfg = $matches[2]; if (-not $cfg) { $cfg = $matches[3] } }
       if ($wmi.PathName -match '-log_dir=("([^"]+)"|(\S+))') { $logDir = $matches[2]; if (-not $logDir) { $logDir = $matches[3] } }
       if ($cfg -and (Test-Path $cfg)) {
         $txt = Get-Content $cfg -Raw
-        $handler = 'desconocido'
-        if ($txt -match 'registry_handler') { $handler = 'registry_handler (correcto para Windows)' }
-        elseif ($txt -match 'filesystem_handler') { $handler = 'filesystem_handler (config de Linux: el MSI esta mal generado)' }
+        $handler = 'unknown'
+        if ($txt -match 'registry_handler') { $handler = 'registry_handler (correct for Windows)' }
+        elseif ($txt -match 'filesystem_handler') { $handler = 'filesystem_handler (Linux config: the MSI was generated incorrectly)' }
         Write-Host "Config      : $cfg ($((Get-Item $cfg).Length) bytes) -> $handler"
       }
       if ($logDir -and (Test-Path $logDir)) {
         $errLog = Get-ChildItem $logDir -Filter '*ERROR*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($errLog) {
-          Write-Host "Ultimo error del cliente ($($errLog.Name)):"
+          Write-Host "Last client error ($($errLog.Name)):"
           Get-Content $errLog.FullName -Tail 6 | ForEach-Object { Write-Host "  $_" }
         }
       }
@@ -230,8 +227,8 @@ function Show-ServiceDiagnostics {
       $msg = ($e.Message -split "`r?`n")[0]
       Write-Host ("[{0}] {1}: {2}" -f $e.TimeCreated.ToString('HH:mm:ss'), $e.ProviderName, $msg)
     }
-  } catch { Write-Host 'No se pudieron leer los eventos de Windows.' }
-  Write-Host 'Mas detalle: Visor de eventos > Registros de Windows > Sistema / Aplicacion.'
+  } catch { Write-Host 'Could not read the Windows events.' }
+  Write-Host 'More detail: Event Viewer > Windows Logs > System / Application.'
   Write-Host ''
 }
 
@@ -249,17 +246,17 @@ function Test-TcpPort([string]$Ip, [int]$Port, [int]$TimeoutMs = 3000) {
   }
 }
 
-# --- Comprobaciones previas -----------------------------------------------------
+# --- Preliminary checks ---------------------------------------------------------
 
 $identity  = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-  Fail 'Ejecuta este script como Administrador.'
+  Fail 'Run this script as Administrator.'
 }
 
 $Interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
 
-# El fichero de etiqueta se lee con la pagina de codigos del sistema, no con UTF-8.
+# The label file is read with the system code page, not UTF-8.
 $encoding = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage)
 
 function Get-CurrentLabel {
@@ -268,12 +265,12 @@ function Get-CurrentLabel {
   return $first.Trim()
 }
 
-# --- Instalador (.msi) ----------------------------------------------------------
+# --- Installer (.msi) -----------------------------------------------------------
 
 if ($Msi) {
-  if (-not (Test-Path -LiteralPath $Msi -PathType Leaf)) { Fail "No existe el instalador: $Msi" }
+  if (-not (Test-Path -LiteralPath $Msi -PathType Leaf)) { Fail "Installer does not exist: $Msi" }
   if ([IO.Path]::GetExtension($Msi).ToLowerInvariant() -ne '.msi') {
-    Fail "El instalador debe ser un .msi: $Msi"
+    Fail "The installer must be an .msi: $Msi"
   }
   $Msi = (Resolve-Path -LiteralPath $Msi).Path
 } else {
@@ -289,18 +286,18 @@ if ($Msi) {
   } elseif ($found.Count -gt 1) {
     if (-not $Interactive) {
       $found | ForEach-Object { Write-Host "  $($_.FullName)" }
-      Fail 'Hay varios .msi; indica cual con -Msi.'
+      Fail 'There are several .msi files; specify which one with -Msi.'
     }
-    Write-Host 'Hay varios instaladores:'
+    Write-Host 'There are several installers:'
     for ($i = 0; $i -lt $found.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $found[$i].Name) }
-    $choice = Ask 'Numero del instalador a usar' '1'
+    $choice = Ask 'Number of the installer to use' '1'
     $n = 0
-    if (-not [int]::TryParse($choice, [ref]$n) -or $n -lt 1 -or $n -gt $found.Count) { Fail "Opcion no valida: '$choice'." }
+    if (-not [int]::TryParse($choice, [ref]$n) -or $n -lt 1 -or $n -gt $found.Count) { Fail "Invalid option: '$choice'." }
     $Msi = $found[$n - 1].FullName
   }
 }
 
-# --- Datos: parametros, preguntas o lo ya configurado ----------------------------
+# --- Data: parameters, prompts or what is already configured ---------------------
 
 $names = @()
 if ($ServerName) {
@@ -311,8 +308,8 @@ if ($null -eq $Label) { $Label = '' }
 if ($Label)    { $Label = $Label.Trim() }
 if ($ServerIp) { $ServerIp = $ServerIp.Trim() }
 
-# Valores por defecto del servidor: los de la plantilla y, si no los hay, lo que
-# ya tenga este equipo en el fichero hosts.
+# Default server values: those from the template and, if there are none, what
+# this computer already has in the hosts file.
 $defIp = $DefaultServerIp.Trim()
 $defNames = $DefaultServerName.Trim()
 if (-not $defIp -or -not $defNames) {
@@ -326,21 +323,21 @@ if (-not $defIp -or -not $defNames) {
 
 if ($Interactive) {
   if (-not $LabelGiven) {
-    Write-Host 'Etiqueta: nombre del sensor al que pertenece este equipo.'
-    Write-Host 'Pulsa Enter para dejarla vacia (el equipo ira al sensor por defecto).'
+    Write-Host 'Label: name of the sensor this computer belongs to.'
+    Write-Host 'Press Enter to leave it empty (the computer will go to the default sensor).'
     $curLabel = Get-CurrentLabel
-    if ($curLabel) { Write-Host "Etiqueta actual en este equipo: $curLabel" }
-    $Label = Ask 'Etiqueta' ''
+    if ($curLabel) { Write-Host "Current label on this computer: $curLabel" }
+    $Label = Ask 'Label' ''
   }
   if (-not $NoHosts -and (-not $ServerIp -or $names.Count -eq 0)) {
-    Write-Host 'Servidor GRR: se anadira al fichero hosts para que este equipo lo resuelva.'
-    Write-Host 'Pulsa Enter para aceptar el valor entre corchetes, o escribe otro para sustituirlo.'
-    if (-not $ServerIp)      { $ServerIp = Ask 'IP del servidor GRR' $defIp }
-    if ($names.Count -eq 0)  { $names = @((Ask 'Nombre con dominio del servidor GRR' $defNames) -split '[,\s]+' | Where-Object { $_ }) }
+    Write-Host 'GRR server: it will be added to the hosts file so this computer can resolve it.'
+    Write-Host 'Press Enter to accept the value in brackets, or type another one to replace it.'
+    if (-not $ServerIp)      { $ServerIp = Ask 'GRR server IP' $defIp }
+    if ($names.Count -eq 0)  { $names = @((Ask 'GRR server name with domain' $defNames) -split '[,\s]+' | Where-Object { $_ }) }
   }
 } else {
-  # Sin terminal no se pregunta: se usan los valores de la plantilla (o lo ya
-  # configurado) y, si no se indica etiqueta, la que ya tenga el equipo.
+  # Without a terminal nothing is asked: the template values (or what is already
+  # configured) are used and, if no label is given, the one the computer already has.
   if (-not $LabelGiven) { $Label = Get-CurrentLabel }
   if (-not $NoHosts) {
     if (-not $ServerIp)     { $ServerIp = $defIp }
@@ -351,110 +348,110 @@ if ($Interactive) {
 if ($null -eq $Label) { $Label = '' }
 $Label = $Label.Trim()
 
-# --- Validacion -----------------------------------------------------------------
+# --- Validation -----------------------------------------------------------------
 
-# La etiqueta puede estar vacia (equipo sin etiqueta). El fichero es una lista
-# separada por comas: no puede contenerlas ni llevar saltos de linea u otros
-# caracteres de control.
+# The label may be empty (computer without a label). The file is a
+# comma-separated list: it cannot contain commas, line breaks or other
+# control characters.
 if ($Label) {
-  if ($Label.Contains(',')) { Fail 'Etiqueta no valida: no puede contener comas.' }
+  if ($Label.Contains(',')) { Fail 'Invalid label: it cannot contain commas.' }
   if ($Label -match '[\x00-\x1F\x7F]') {
-    Fail 'Etiqueta no valida: no puede contener saltos de linea ni caracteres de control.'
+    Fail 'Invalid label: it cannot contain line breaks or control characters.'
   }
-  if ($Label.Length -gt 128) { Fail 'Etiqueta demasiado larga (maximo 128 caracteres).' }
+  if ($Label.Length -gt 128) { Fail 'Label too long (maximum 128 characters).' }
 }
 
 if (-not $NoHosts) {
-  if (-not $ServerIp) { Fail 'Falta la IP del servidor GRR (-ServerIp).' }
-  if (-not (Test-ValidIp $ServerIp)) { Fail "IP no valida: '$ServerIp'." }
-  if ($names.Count -eq 0) { Fail 'Falta el nombre del servidor GRR (-ServerName).' }
+  if (-not $ServerIp) { Fail 'Missing GRR server IP (-ServerIp).' }
+  if (-not (Test-ValidIp $ServerIp)) { Fail "Invalid IP: '$ServerIp'." }
+  if ($names.Count -eq 0) { Fail 'Missing GRR server name (-ServerName).' }
   foreach ($n in $names) {
-    if (-not (Test-ValidHostname $n)) { Fail "Nombre de host no valido: '$n'." }
-    if (-not $n.Contains('.')) { Write-Warning "'$n' no lleva dominio; se esperaba un nombre del tipo host.dominio." }
+    if (-not (Test-ValidHostname $n)) { Fail "Invalid host name: '$n'." }
+    if (-not $n.Contains('.')) { Write-Warning "'$n' has no domain; a name of the form host.domain was expected." }
   }
   $ServerIp = [Net.IPAddress]::Parse($ServerIp).IPAddressToString
 }
 
-# --- Resumen ---------------------------------------------------------------------
+# --- Summary ---------------------------------------------------------------------
 
 Write-Host ''
-Write-Host 'Se va a aplicar:'
+Write-Host 'The following will be applied:'
 $labelShown = $Label
-if (-not $Label) { $labelShown = '(ninguna)' }
-Write-Host "  Etiqueta ........ $labelShown"
+if (-not $Label) { $labelShown = '(none)' }
+Write-Host "  Label ........... $labelShown"
 if ($NoHosts) {
-  Write-Host '  hosts ........... sin cambios (-NoHosts)'
+  Write-Host '  hosts ........... unchanged (-NoHosts)'
 } else {
-  Write-Host "  Servidor GRR .... $ServerIp  $($names -join ' ')"
+  Write-Host "  GRR server ...... $ServerIp  $($names -join ' ')"
 }
 if ($Msi) {
-  Write-Host "  Instalador ...... $([IO.Path]::GetFileName($Msi))"
+  Write-Host "  Installer ....... $([IO.Path]::GetFileName($Msi))"
 } else {
-  Write-Host '  Instalador ...... ninguno (se mantiene el cliente instalado)'
+  Write-Host '  Installer ....... none (the installed client is kept)'
 }
 Write-Host ''
 
 if ($Interactive -and -not $Yes) {
-  $answer = Read-Host 'Continuar? [S/n]'
-  if ($answer -and @('s', 'si', 'y', 'yes') -notcontains $answer.Trim().ToLowerInvariant()) {
-    Write-Host 'Cancelado.'
+  $answer = Read-Host 'Continue? [Y/n]'
+  if ($answer -and @('y', 'yes') -notcontains $answer.Trim().ToLowerInvariant()) {
+    Write-Host 'Cancelled.'
     exit 0
   }
 }
 
 $changed = [bool]$Force
 
-# --- 0. Fichero hosts --------------------------------------------------------------
+# --- 0. Hosts file ------------------------------------------------------------------
 
 if (-not $NoHosts) {
   foreach ($c in @(Get-HostsConflicts $HostsFile $ServerIp $names $HostsBegin $HostsEnd)) {
-    Write-Warning "Ya hay una entrada en hosts con otra IP para el mismo nombre: $c"
-    Write-Warning 'Se usa la primera entrada del fichero; revisala o eliminala a mano.'
+    Write-Warning "There is already a hosts entry with a different IP for the same name: $c"
+    Write-Warning 'The first entry in the file is used; review it or remove it by hand.'
   }
 
   try {
     $result = Update-HostsBlock $HostsFile $ServerIp $names $HostsBegin $HostsEnd
   } catch {
-    Fail "No se pudo escribir $HostsFile ($($_.Exception.Message)). Si hay un antivirus que protege el fichero hosts, permite el cambio."
+    Fail "Could not write $HostsFile ($($_.Exception.Message)). If an antivirus protects the hosts file, allow the change."
   }
 
   if ($result -eq 'updated') {
     $changed = $true
-    Write-Host "hosts actualizado: $ServerIp $($names -join ' ')"
+    Write-Host "hosts updated: $ServerIp $($names -join ' ')"
     if (Get-Command ipconfig.exe -ErrorAction SilentlyContinue) { & ipconfig.exe /flushdns | Out-Null }
   } else {
-    Write-Host "hosts ya estaba actualizado: $ServerIp $($names -join ' ')"
+    Write-Host "hosts was already up to date: $ServerIp $($names -join ' ')"
   }
 
   foreach ($n in $names) {
     try { $resolved = @([Net.Dns]::GetHostAddresses($n) | ForEach-Object { $_.IPAddressToString }) } catch { $resolved = @() }
     if ($resolved.Count -eq 0) {
-      Write-Warning "'$n' no se resuelve en este equipo."
+      Write-Warning "'$n' does not resolve on this computer."
     } elseif ($resolved -notcontains $ServerIp) {
-      Write-Warning "'$n' se resuelve a $($resolved -join ', ') y no a $ServerIp (hay otra entrada que tiene prioridad)."
+      Write-Warning "'$n' resolves to $($resolved -join ', ') and not to $ServerIp (another entry takes precedence)."
     }
   }
 }
 
-# --- 1. Etiqueta (antes de instalar, para que el cliente arranque ya con ella) -----
-# Sin etiqueta, el fichero se elimina (el servidor lo trata como opcional).
+# --- 1. Label (before installing, so the client starts with it already set) --------
+# Without a label, the file is removed (the server treats it as optional).
 
 if (-not $Label) {
   if (Test-Path -LiteralPath $LabelFile) {
     Remove-Item -LiteralPath $LabelFile -Force
     $changed = $true
-    Write-Host "Etiqueta eliminada: se ha borrado $LabelFile"
+    Write-Host "Label removed: $LabelFile has been deleted"
   } else {
-    Write-Host "Sin etiqueta: no hay nada que escribir en $LabelFile"
+    Write-Host "No label: nothing to write to $LabelFile"
   }
 } else {
   if (-not (Test-Path -LiteralPath $LabelDir)) {
     New-Item -ItemType Directory -Path $LabelDir -Force | Out-Null
   }
-  # Solo SYSTEM y Administradores pueden modificarla; el resto, lectura.
-  # Se usan SIDs porque los nombres de grupo cambian segun el idioma de Windows.
+  # Only SYSTEM and Administrators can modify it; everyone else gets read access.
+  # SIDs are used because group names change depending on the Windows language.
   & icacls.exe $LabelDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-  if ($LASTEXITCODE -ne 0) { Fail "No se pudieron ajustar los permisos de $LabelDir" }
+  if ($LASTEXITCODE -ne 0) { Fail "Could not set the permissions on $LabelDir" }
 
   $expected = $Label + [Environment]::NewLine
 
@@ -463,42 +460,42 @@ if (-not $Label) {
     $current = [IO.File]::ReadAllText($LabelFile, $encoding)
   }
   if ($current -ceq $expected) {
-    Write-Host "Etiqueta '$Label' ya estaba en $LabelFile"
+    Write-Host "Label '$Label' was already in $LabelFile"
   } else {
     $tmp = "$LabelFile.tmp"
     [IO.File]::WriteAllText($tmp, $expected, $encoding)
     Move-Item -LiteralPath $tmp -Destination $LabelFile -Force
     $changed = $true
-    Write-Host "Etiqueta '$Label' escrita en $LabelFile"
+    Write-Host "Label '$Label' written to $LabelFile"
   }
 }
 
-# --- 2. Instalacion / actualizacion --------------------------------------------------
+# --- 2. Installation / update ---------------------------------------------------------
 
 if ($Msi) {
   $log = Join-Path $env:TEMP 'grr_msi_install.log'
-  Write-Host "Instalando $Msi (log: $log)"
+  Write-Host "Installing $Msi (log: $log)"
   $proc = Start-Process -FilePath 'msiexec.exe' `
     -ArgumentList @('/i', "`"$Msi`"", '/qn', '/norestart', '/l*v', "`"$log`"") `
     -Wait -PassThru
-  # 0 = correcto; 3010 = correcto, pero Windows pide reiniciar.
+  # 0 = success; 3010 = success, but Windows asks for a restart.
   if ($proc.ExitCode -notin 0, 3010) {
-    Fail "msiexec termino con el codigo $($proc.ExitCode). Revisa $log"
+    Fail "msiexec finished with code $($proc.ExitCode). Check $log"
   }
-  if ($proc.ExitCode -eq 3010) { Write-Warning 'La instalacion pide reiniciar Windows.' }
+  if ($proc.ExitCode -eq 3010) { Write-Warning 'The installation asks for a Windows restart.' }
   $changed = $true
 }
 
-# --- 3. Servicio ----------------------------------------------------------------------
+# --- 3. Service -----------------------------------------------------------------------
 
-# El nombre exacto depende de la version del instalador: se busca por patron.
+# The exact name depends on the installer version: it is looked up by pattern.
 $svc = Get-Service | Where-Object { $_.Name -match 'fleetspeak|grr' -or $_.DisplayName -match 'fleetspeak|grr' } |
        Select-Object -First 1
-if (-not $svc) { Fail 'No se encuentra el servicio del cliente GRR/Fleetspeak. Instala primero el cliente: deja el .msi junto al script o usa -Msi.' }
+if (-not $svc) { Fail 'The GRR/Fleetspeak client service was not found. Install the client first: leave the .msi next to the script or use -Msi.' }
 
 Set-Service -Name $svc.Name -StartupType Automatic
 
-# La etiqueta se lee al arrancar el cliente: se reinicia solo si algo ha cambiado.
+# The label is read when the client starts: restart only if something changed.
 try {
   if ($changed) {
     Restart-Service -Name $svc.Name -Force -ErrorAction Stop
@@ -506,32 +503,32 @@ try {
     Start-Service -Name $svc.Name -ErrorAction Stop
   }
 } catch {
-  Write-Host "No se pudo iniciar el servicio '$($svc.Name)': $($_.Exception.Message)"
+  Write-Host "Could not start service '$($svc.Name)': $($_.Exception.Message)"
   Show-ServiceDiagnostics $svc.Name
-  Fail "El servicio '$($svc.Name)' no arranca. Revisa el diagnostico anterior."
+  Fail "Service '$($svc.Name)' does not start. Check the diagnostics above."
 }
 
-# --- 4. Espera a que quede activo -------------------------------------------------------
+# --- 4. Wait for it to become active ----------------------------------------------------
 
 for ($i = 0; $i -lt $WaitSeconds; $i++) {
   $svc.Refresh()
   if ($svc.Status -eq 'Running') {
     if ($Label) {
-      Write-Host "Cliente activo con la etiqueta '$Label' (servicio '$($svc.Name)')."
+      Write-Host "Client active with label '$Label' (service '$($svc.Name)')."
     } else {
-      Write-Host "Cliente activo, sin etiqueta (servicio '$($svc.Name)')."
+      Write-Host "Client active, no label (service '$($svc.Name)')."
     }
     if (-not $NoHosts) {
       $shown = $ServerIp
       if ($ServerIp.Contains(':')) { $shown = "[$ServerIp]" }
       if (Test-TcpPort $ServerIp $ServerPort) {
-        Write-Host "Servidor GRR accesible en ${shown}:${ServerPort}."
+        Write-Host "GRR server reachable at ${shown}:${ServerPort}."
       } else {
-        Write-Warning "No se pudo conectar con ${shown}:${ServerPort}. Revisa red y firewall; el cliente reintentara."
+        Write-Warning "Could not connect to ${shown}:${ServerPort}. Check network and firewall; the client will retry."
       }
     }
     exit 0
   }
   Start-Sleep -Seconds 1
 }
-Fail "El servicio '$($svc.Name)' no esta activo. Revisa el Visor de eventos (Aplicacion/Sistema)."
+Fail "Service '$($svc.Name)' is not running. Check the Event Viewer (Application/System)."

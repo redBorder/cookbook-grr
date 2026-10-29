@@ -1,51 +1,35 @@
 #!/bin/bash
 #
-# deploy_fedora.sh - Instala (o actualiza) el cliente GRR en Fedora/RHEL/Rocky,
-# fija su etiqueta y registra el servidor GRR en /etc/hosts.
+# deploy_fedora.sh - Installs (or updates) the GRR client on Fedora/RHEL/Rocky,
+# sets its tag, and registers the GRR server in /etc/hosts.
 #
-# El instalador (.rpm) es el mismo para todas las sedes y se busca junto a este
-# script. La etiqueta se lee en cada arranque del cliente desde /etc/grr_labels
-# y el servidor la usa para decidir a que sensor pertenece el endpoint: debe
-# coincidir con el nombre del sensor (sin importar mayusculas); si no coincide
-# con ninguno, el endpoint va al sensor por defecto.
+# Command-line usage:
+#   sudo ./deploy_fedora.sh -l <label> [-i <IP> -n <domain_name>] [-y]
+#   If -i or -n is not specified, the values used to generate this script are used.
 #
-# Uso interactivo (pregunta lo que falte):
-#   sudo ./deploy_fedora.sh
-#   - Etiqueta: si se pulsa Enter queda vacia (el equipo va al sensor por defecto).
-#   - IP y nombre del servidor GRR: se muestran entre corchetes los valores con
-#     los que se ha generado este script; Enter los acepta y, si se escribe otro
-#     valor, lo sustituye.
-#
-# Uso por parametros:
-#   sudo ./deploy_fedora.sh -l <sensor> [-i <IP> -n <nombre.dominio>] [-y]
-#   Sin -i / -n se usan los valores con los que se ha generado este script.
-#
-# Opciones:
-#   -l, --label NOMBRE      Etiqueta: nombre del sensor del endpoint. Con ""
-#                           se deja el equipo sin etiqueta.
-#   -i, --server-ip IP      IP (v4 o v6) del servidor GRR.
-#   -n, --server-name FQDN  Nombre del servidor GRR con su dominio. Se pueden
-#                           indicar varios separados por comas o espacios.
-#   -r, --rpm FICHERO       Instalador. Por defecto, el .rpm junto a este script.
-#       --no-hosts          No modificar /etc/hosts.
-#   -y, --yes               No pedir confirmacion.
-#       --force             Reinicia el cliente aunque no haya cambios.
-#   -h, --help              Esta ayuda.
+# Options:
+#   -l, --label NAME      Label
+#   -i, --server-ip IP      IP (v4 or v6) of the GRR server.
+#   -n, --server-name FQDN  GRR server name with its domain.
+#   -r, --rpm FILE       Installer. By default, the .rpm file next to this script.
+#       --no-hosts          Do not modify /etc/hosts.
+#   -y, --yes               Do not prompt for confirmation.
+#       --force             Restart the client even if there are no changes.
+#   -h, --help              This help message.
 #
 set -euo pipefail
 
-# Sobrescribibles por entorno (solo para pruebas).
 LABEL_FILE="${GRR_LABEL_FILE:-/etc/grr_labels}"
 HOSTS_FILE="${GRR_HOSTS_FILE:-/etc/hosts}"
 SERVICE="${GRR_SERVICE:-fleetspeak-client}"
 WAIT_SECONDS="${GRR_WAIT_SECONDS:-30}"
 SERVER_PORT="${GRR_SERVER_PORT:-8443}"
 
-# Servidor GRR con el que se ha generado este script (los rellena el servidor).
+# GRR Server
 DEFAULT_SERVER_IP='<%= @server_ip %>'
 DEFAULT_SERVER_NAME='<%= @server_name %>'
 
-HOSTS_BEGIN="# BEGIN GRR-CLIENT (gestionado por deploy_fedora.sh, no editar)"
+HOSTS_BEGIN="# BEGIN GRR-CLIENT (managed by GRR, do not edit)"
 HOSTS_END="# END GRR-CLIENT"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -79,7 +63,7 @@ usage() {
 }
 
 die()  { echo "Error: $*" >&2; exit 1; }
-warn() { echo "Aviso: $*" >&2; }
+warn() { echo "Warning: $*" >&2; }
 
 trim() {
   local s="$1"
@@ -88,7 +72,7 @@ trim() {
   printf '%s' "$s"
 }
 
-# ask VARIABLE "Pregunta" [valor-por-defecto]
+# ask VARIABLE "Question" [default-value]
 ask() {
   local __var="$1" prompt="$2" def="${3:-}" ans=""
   if [[ -n "$def" ]]; then
@@ -100,7 +84,7 @@ ask() {
   printf -v "$__var" '%s' "$(trim "$ans")"
 }
 
-# ---------------------------------------------------------------- validacion
+# ---------------------------------------------------------------- validation
 
 valid_ipv4() {
   local o
@@ -123,29 +107,26 @@ valid_hostname() {
 }
 
 validate_label() {
-  # La etiqueta puede estar vacia (equipo sin etiqueta). El fichero es una lista
-  # separada por comas: no puede contenerlas ni llevar saltos de linea u otros
-  # caracteres de control.
   [[ -n "$LABEL" ]] || return 0
-  [[ "$LABEL" != *,* ]] || die "etiqueta no valida: no puede contener comas."
-  [[ ! "$LABEL" =~ [[:cntrl:]] ]] || die "etiqueta no valida: no puede contener saltos de linea ni caracteres de control."
-  (( ${#LABEL} <= 128 )) || die "etiqueta demasiado larga (maximo 128 caracteres)."
+  [[ "$LABEL" != *,* ]] || die "Invalid label: It cannot contain commas."
+  [[ ! "$LABEL" =~ [[:cntrl:]] ]] || die "Invalid label: It cannot contain line breaks or control characters."
+  (( ${#LABEL} <= 128 )) || die "Label is too long (maximum 128 characters)."
 }
 
 validate_server() {
   local n
-  [[ -n "$SERVER_IP" ]] || die "falta la IP del servidor GRR (-i)."
-  valid_ip "$SERVER_IP" || die "IP no valida: '$SERVER_IP'."
+  [[ -n "$SERVER_IP" ]] || die "The GRR server's IP address is missing (-i)."
+  valid_ip "$SERVER_IP" || die "Invalid IP address: '$SERVER_IP'."
 
   read -r -a SERVER_NAMES <<< "${SERVER_NAMES_RAW//,/ }"
-  (( ${#SERVER_NAMES[@]} > 0 )) || die "falta el nombre del servidor GRR (-n)."
+  (( ${#SERVER_NAMES[@]} > 0 )) || die "The GRR server name is missing (-n)."
   for n in "${SERVER_NAMES[@]}"; do
-    valid_hostname "$n" || die "nombre de host no valido: '$n'."
-    [[ "$n" == *.* ]] || warn "'$n' no lleva dominio; se esperaba un nombre del tipo host.dominio."
+    valid_hostname "$n" || die "Invalid hostname: '$n'."
+    [[ "$n" == *.* ]] || warn "'$n' It does not have a domain name; a name of the form host.domain was expected."
   done
 }
 
-# ---------------------------------------------------------------- argumentos
+# ---------------------------------------------------------------- arguments
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -157,7 +138,7 @@ while [[ $# -gt 0 ]]; do
     -y|--yes)         ASSUME_YES=1; shift ;;
     --force)          FORCE=1; shift ;;
     -h|--help)        usage 0 ;;
-    *) echo "Opcion desconocida: $1" >&2; usage ;;
+    *) echo "Unknown option: $1" >&2; usage ;;
   esac
 done
 
@@ -165,15 +146,15 @@ LABEL="$(trim "$LABEL")"
 SERVER_IP="$(trim "$SERVER_IP")"
 SERVER_NAMES_RAW="$(trim "$SERVER_NAMES_RAW")"
 
-[[ $EUID -eq 0 ]] || die "ejecuta este script como root (sudo)."
+[[ $EUID -eq 0 ]] || die "Run this script as root (sudo)."
 
-# ------------------------------------------------- valores actuales (defecto)
+# ------------------------------------------------- current values (default)
 
 current_label() {
   [[ -f "$LABEL_FILE" ]] && head -n1 "$LABEL_FILE" | tr -d '\r' || true
 }
 
-# Primera linea del bloque gestionado de /etc/hosts: "IP nombre [nombre...]"
+# First line of the managed block in /etc/hosts: “IP name [name...]”
 current_hosts_entry() {
   [[ -f "$HOSTS_FILE" ]] || return 0
   awk -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" '
@@ -183,8 +164,8 @@ current_hosts_entry() {
   ' "$HOSTS_FILE"
 }
 
-# Valores por defecto del servidor: los de la plantilla y, si no los hay, lo que
-# ya tenga este equipo en /etc/hosts. Rellena DEF_IP y DEF_NAMES.
+# Server defaults: those from the template, and if none exist, whatever
+# is already in /etc/hosts on this machine. Fill in DEF_IP and DEF_NAMES.
 compute_server_defaults() {
   local entry
   DEF_IP="$(trim "$DEFAULT_SERVER_IP")"
@@ -199,7 +180,7 @@ compute_server_defaults() {
   return 0
 }
 
-# --------------------------------------------------------- instalador (.rpm)
+# --------------------------------------------------------- installer (.rpm)
 
 find_rpms() {
   local dir
@@ -219,18 +200,18 @@ choose_rpm() {
     1) RPM="${FOUND_RPMS[0]}" ;;
     *)
       if (( INTERACTIVE )); then
-        echo "Hay varios instaladores:"
+        echo "There are multiple installers:"
         for i in "${!FOUND_RPMS[@]}"; do
           printf '  %d) %s\n' "$((i + 1))" "$(basename "${FOUND_RPMS[$i]}")"
         done
-        ask choice "Numero del instalador a usar" "1"
+        ask choice "Installer number to use" "1"
         [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#FOUND_RPMS[@]} )) \
-          || die "opcion no valida: '$choice'."
+          || die "Invalid option: '$choice'."
         RPM="${FOUND_RPMS[$((choice - 1))]}"
       else
-        printf 'Instaladores encontrados:\n' >&2
+        printf 'Installers found:\n' >&2
         printf '  %s\n' "${FOUND_RPMS[@]}" >&2
-        die "hay varios .rpm; indica cual con --rpm."
+        die "There are several .rpm files; specify which one with --rpm."
       fi
       ;;
   esac
@@ -238,39 +219,39 @@ choose_rpm() {
 
 RPM_LABEL=""
 if [[ -n "$RPM" ]]; then
-  [[ -f "$RPM" ]] || die "no existe el instalador: $RPM"
+  [[ -f "$RPM" ]] || die "The installer does not exist: $RPM"
 else
   choose_rpm
 fi
 if [[ -n "$RPM" ]]; then
-  command -v rpm >/dev/null 2>&1 || die "este script necesita rpm (Fedora/RHEL/Rocky)."
+  command -v rpm >/dev/null 2>&1 || die "This script requires RPM (Fedora/RHEL/Rocky)."
   RPM_LABEL="$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}' "$RPM" 2>/dev/null)" \
-    || die "no es un paquete rpm valido: $RPM"
+    || die "This is not a valid RPM package: $RPM"
 fi
 
-# --------------------------------------------------------------- preguntas
+# --------------------------------------------------------------- questions
 
 compute_server_defaults
 
 if (( INTERACTIVE )); then
   if (( ! LABEL_GIVEN )); then
-    echo "Etiqueta: nombre del sensor al que pertenece este equipo."
-    echo "Pulsa Enter para dejarla vacia (el equipo ira al sensor por defecto)."
+    echo "Label: Location where this equipment is located."
+    echo "Press Enter to leave it blank (the system will use the default sensor)."
     cur_label="$(current_label)"
-    [[ -z "$cur_label" ]] || echo "Etiqueta actual en este equipo: $cur_label"
-    ask LABEL "Etiqueta" ""
+    [[ -z "$cur_label" ]] || echo "Current label on this device: $cur_label"
+    ask LABEL "Label" ""
   fi
 
   if (( ! SKIP_HOSTS )) && [[ -z "$SERVER_IP" || -z "$SERVER_NAMES_RAW" ]]; then
-    echo "Servidor GRR: se anadira a $HOSTS_FILE para que este equipo lo resuelva."
-    echo "Pulsa Enter para aceptar el valor entre corchetes, o escribe otro para sustituirlo."
-    [[ -z "$SERVER_IP" ]]        && ask SERVER_IP "IP del servidor GRR" "$DEF_IP"
-    [[ -z "$SERVER_NAMES_RAW" ]] && ask SERVER_NAMES_RAW "Nombre con dominio del servidor GRR" "$DEF_NAMES"
+    echo "GRR Server: It will be added to $HOSTS_FILE so that this computer can resolve it."
+    echo "Press Enter to accept the value in brackets, or type another value to replace it."
+    [[ -z "$SERVER_IP" ]]        && ask SERVER_IP "GRR server IP address" "$DEF_IP"
+    [[ -z "$SERVER_NAMES_RAW" ]] && ask SERVER_NAMES_RAW "Name with GRR server domain" "$DEF_NAMES"
   fi
 fi
 
-# Sin terminal no se pregunta: se usan los valores de la plantilla (o lo ya
-# configurado) y, si no se indica etiqueta, la que ya tenga el equipo.
+# If there is no terminal, no prompt is displayed: the values from the template (or the existing
+# configuration) are used, and if no label is specified, the one already assigned to the device is used.
 if (( ! INTERACTIVE )); then
   (( LABEL_GIVEN )) || LABEL="$(current_label)"
   if (( ! SKIP_HOSTS )); then
@@ -286,29 +267,29 @@ SERVER_NAMES_RAW="$(trim "$SERVER_NAMES_RAW")"
 validate_label
 (( SKIP_HOSTS )) || validate_server
 
-# --------------------------------------------------------------- resumen
+# --------------------------------------------------------------- summary
 
 echo
-echo "Se va a aplicar:"
-echo "  Etiqueta ........ ${LABEL:-(ninguna)}"
+echo "The following will apply:"
+echo "  Label ........... ${LABEL:-(none)}"
 if (( SKIP_HOSTS )); then
-  echo "  /etc/hosts ...... sin cambios (--no-hosts)"
+  echo "  /etc/hosts ...... no changes (--no-hosts)"
 else
-  echo "  Servidor GRR .... $SERVER_IP  ${SERVER_NAMES[*]}"
+  echo "  GRR Server .... $SERVER_IP  ${SERVER_NAMES[*]}"
 fi
 if [[ -n "$RPM" ]]; then
-  echo "  Instalador ...... $(basename "$RPM")  ($RPM_LABEL)"
+  echo "  Installer ...... $(basename "$RPM")  ($RPM_LABEL)"
 else
-  echo "  Instalador ...... ninguno (se mantiene el cliente instalado)"
+  echo "  Installer ...... none (the installed client remains)"
 fi
 echo
 
 if (( INTERACTIVE && ! ASSUME_YES )); then
   ans=""
-  read -r -p "Continuar? [S/n]: " ans || true
+  read -r -p "Continue? [Y/n]: " ans || true
   case "${ans,,}" in
-    ""|s|si|y|yes) ;;
-    *) echo "Cancelado."; exit 0 ;;
+    ""|y|yes) ;;
+    *) echo "Canceled."; exit 0 ;;
   esac
 fi
 
@@ -330,8 +311,8 @@ warn_hosts_conflicts() {
       { for (i = 2; i <= NF; i++) if (tolower($i) == tolower(n) && $1 != ip) { print; exit } }
     ' "$HOSTS_FILE")"
     if [[ -n "$line" ]]; then
-      warn "'$name' ya aparece en $HOSTS_FILE con otra IP: $line"
-      warn "la primera entrada del fichero es la que se usa; revisala o eliminala a mano."
+      warn "'$name' It already appears in $HOSTS_FILE with a different IP address: $line"
+      warn "The first entry in the file is the one that is used; review it or delete it manually."
     fi
   done
 }
@@ -343,14 +324,12 @@ apply_hosts() {
 
   [[ -f "$HOSTS_FILE" ]] || : > "$HOSTS_FILE"
 
-  # Todo el fichero salvo nuestro bloque anterior.
   awk -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" '
     $0 == b { skip = 1; next }
     $0 == e { skip = 0; next }
     !skip
   ' "$HOSTS_FILE" > "$tmp"
 
-  # El ultimo caracter debe ser un salto de linea antes de anadir el bloque.
   if [[ -s "$tmp" && -n "$(tail -c1 "$tmp")" ]]; then
     echo >> "$tmp"
   fi
@@ -361,18 +340,18 @@ apply_hosts() {
   } >> "$tmp"
 
   if cmp -s "$tmp" "$HOSTS_FILE"; then
-    echo "$HOSTS_FILE ya estaba actualizado: $SERVER_IP ${SERVER_NAMES[*]}"
+    echo "$HOSTS_FILE It was already up to date: $SERVER_IP ${SERVER_NAMES[*]}"
     return 0
   fi
 
-  # Copia de seguridad la primera vez que se modifica.
+  # Back up the first time it is modified.
   [[ -e "$HOSTS_FILE.grr.bak" ]] || cp -p "$HOSTS_FILE" "$HOSTS_FILE.grr.bak"
 
-  # cat > conserva el inodo (valido si /etc/hosts es un enlace o un montaje).
+  # cat > preserves the inode (applies if /etc/hosts is a link or a mount).
   cat "$tmp" > "$HOSTS_FILE"
   restore_context "$HOSTS_FILE"
   CHANGED=1
-  echo "$HOSTS_FILE actualizado: $SERVER_IP ${SERVER_NAMES[*]}"
+  echo "$HOSTS_FILE updated: $SERVER_IP ${SERVER_NAMES[*]}"
 }
 
 verify_resolution() {
@@ -381,9 +360,9 @@ verify_resolution() {
   for name in "${SERVER_NAMES[@]}"; do
     got="$(getent hosts "$name" 2>/dev/null | awk '{print $1; exit}')"
     if [[ -z "$got" ]]; then
-      warn "'$name' no se resuelve en este equipo."
+      warn "'$name' It cannot be resolved on this device."
     elif [[ "$got" != "$SERVER_IP" ]]; then
-      warn "'$name' se resuelve a $got y no a $SERVER_IP (hay otra entrada que tiene prioridad)."
+      warn "'$name' It resolves to $got and not to $SERVER_IP (there is another entry that takes precedence)."
     fi
   done
 }
@@ -392,9 +371,9 @@ check_server_port() {
   local shown="$SERVER_IP"
   [[ "$SERVER_IP" == *:* ]] && shown="[$SERVER_IP]"
   if timeout 3 bash -c ">/dev/tcp/${SERVER_IP}/${SERVER_PORT}" 2>/dev/null; then
-    echo "Servidor GRR accesible en ${shown}:${SERVER_PORT}."
+    echo "GRR Server accessible at ${shown}:${SERVER_PORT}."
   else
-    warn "no se pudo conectar con ${shown}:${SERVER_PORT}. Revisa red y firewall; el cliente reintentara."
+    warn "Unable to connect to ${shown}:${SERVER_PORT}. Check the network and firewall; the client will try again."
   fi
 }
 
@@ -404,17 +383,15 @@ if (( ! SKIP_HOSTS )); then
   verify_resolution
 fi
 
-# ------------------------------------------------------------------ etiqueta
-# Primero la etiqueta, para que el cliente arranque ya con ella. Se escribe en
-# un fichero temporal y se mueve, para no dejarlo a medias. Sin etiqueta, el
-# fichero se elimina (el servidor lo trata como opcional).
+# ------------------------------------------------------------------ label
+
 if [[ -z "$LABEL" ]]; then
   if [[ -e "$LABEL_FILE" ]]; then
     rm -f "$LABEL_FILE"
     CHANGED=1
-    echo "Etiqueta eliminada: se ha borrado $LABEL_FILE"
+    echo "Label deleted: it has been removed $LABEL_FILE"
   else
-    echo "Sin etiqueta: no hay nada que escribir en $LABEL_FILE"
+    echo "No label: there's nothing to write in $LABEL_FILE"
   fi
 else
   tmp="$(mktemp "${LABEL_FILE}.XXXXXX")"
@@ -423,42 +400,42 @@ else
   chmod 0644 "$tmp"
 
   if [[ -f "$LABEL_FILE" ]] && cmp -s "$tmp" "$LABEL_FILE"; then
-    echo "Etiqueta '$LABEL' ya estaba en $LABEL_FILE"
+    echo "The '$LABEL' tag was already in $LABEL_FILE"
   else
     mv -f "$tmp" "$LABEL_FILE"
     CHANGED=1
-    echo "Etiqueta '$LABEL' escrita en $LABEL_FILE"
+    echo "'$LABEL' label written in $LABEL_FILE"
   fi
   restore_context "$LABEL_FILE"
 fi
 
-# --------------------------------------------------------------- instalacion
-# --replacepkgs permite reinstalar la misma version.
+# --------------------------------------------------------------- installation
+# --replacepkgs allows you to reinstall the same version.
 if [[ -n "$RPM" ]]; then
   rpm -U --replacepkgs "$RPM"
   CHANGED=1
 fi
 
-# ------------------------------------------------------------------ servicio
+# ------------------------------------------------------------------ service
 if ! systemctl cat "$SERVICE" >/dev/null 2>&1; then
-  die "el servicio $SERVICE no existe. Instala primero el cliente: copia el .rpm junto a este script o usa --rpm."
+  die "The $SERVICE service does not exist. Install the client first: copy the .rpm file next to this script or use --rpm."
 fi
 systemctl enable "$SERVICE" >/dev/null 2>&1 || true
 
-# Reinicia solo si algo ha cambiado (la etiqueta se lee al arrancar el cliente).
+# Restart only if something has changed (the label is read when the client starts up).
 if (( CHANGED )); then
   systemctl restart "$SERVICE"
 elif ! systemctl is-active --quiet "$SERVICE"; then
   systemctl start "$SERVICE"
 fi
 
-# Espera a que quede activo.
+# Wait until it becomes active.
 for (( i = 0; i < WAIT_SECONDS; i++ )); do
   if systemctl is-active --quiet "$SERVICE"; then
     if [[ -n "$LABEL" ]]; then
-      echo "Cliente activo con la etiqueta '$LABEL'."
+      echo "Active client with the label '$LABEL'."
     else
-      echo "Cliente activo, sin etiqueta."
+      echo "Active client, unlabeled."
     fi
     (( SKIP_HOSTS )) || check_server_port
     exit 0
@@ -466,5 +443,5 @@ for (( i = 0; i < WAIT_SECONDS; i++ )); do
   sleep 1
 done
 
-echo "Error: el servicio $SERVICE no esta activo. Revisa: journalctl -u $SERVICE" >&2
+echo "Error: the $SERVICE service is not active. Check: journalctl -u $SERVICE" >&2
 exit 1
