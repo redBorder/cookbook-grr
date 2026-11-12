@@ -111,7 +111,7 @@ def delete_databag_item(bag, id)
 
   execute "delete_data_bag_item_#{bag}_#{id}" do
     command "knife data bag delete #{bag} #{id} -y"
-    not_if "knife data bag show #{bag} #{id} >/dev/null 2>&1"
+    only_if "knife data bag show #{bag} #{id} >/dev/null 2>&1"
     ignore_failure true
   end
 end
@@ -603,7 +603,7 @@ def drop_databases
       mariadb -e "DROP USER IF EXISTS '#{new_resource.fleetspeak_db_user}'@'localhost';"
       mariadb -e "FLUSH PRIVILEGES;"
     EOH
-    not_if 'command -v mariadb && systemctl is-active --quiet mariadb'
+    only_if 'command -v mariadb >/dev/null 2>&1 && systemctl is-active --quiet mariadb'
   end
 end
 
