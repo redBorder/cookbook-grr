@@ -78,7 +78,7 @@ def load_or_create_databag_item(bag, id)
     return data if data
 
     raise "grr_config: The data bag #{bag}/#{id} exists but could not be decrypted with #{DATABAG_SECRET}. " \
-          "It will not be overwritten. If it is stale (e.g. encrypted with another secret), " \
+          'It will not be overwritten. If it is stale (e.g. encrypted with another secret), ' \
           "delete it with: knife data bag delete #{bag} #{id} -y"
   end
 
@@ -94,14 +94,14 @@ def read_databag_item(bag, id)
   out = shell_out("knife data bag show #{bag} #{id} --secret-file #{DATABAG_SECRET} -F json")
   unless out.exitstatus.zero?
     Chef::Log.warn("grr_config: knife could not decrypt #{bag}/#{id}: #{out.stderr.to_s.strip}")
-    return nil
+    return
   end
 
   json = out.stdout[/\{.*\}/m] # knife prints an "INFO: Using configuration..." line first
   data = json && JSON.parse(json)
-  return nil unless data.is_a?(Hash)
+  return unless data.is_a?(Hash)
   # Values still looking like {"encrypted_data": ...} were not decrypted
-  return nil if data.values.any? { |v| v.is_a?(Hash) && v.key?('encrypted_data') }
+  return if data.values.any? { |v| v.is_a?(Hash) && v.key?('encrypted_data') }
 
   data
 rescue JSON::ParserError => e
