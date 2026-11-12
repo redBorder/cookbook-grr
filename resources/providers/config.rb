@@ -445,7 +445,7 @@ def install_grr
 
   execute 'grr_install_windows_template' do
     command "cp -u #{client_templates_dir}/*.exe.zip #{templates_dir}/"
-    not_if { !Dir.glob("#{client_templates_dir}/*.exe.zip").empty? }
+    only_if { !Dir.glob("#{client_templates_dir}/*.exe.zip").empty? }
     not_if do
       Dir.glob("#{client_templates_dir}/*.exe.zip").all? do |f|
         ::File.exist?("#{templates_dir}/#{::File.basename(f)}")
