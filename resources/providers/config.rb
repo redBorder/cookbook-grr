@@ -69,20 +69,44 @@ private
 # Data bags
 # ----------------------------------------------------------------
 
-# Returns the data bag item that has already arrived
+# Returns the data bag item: reads (decrypts) it if it exists and generates it only if it
+# really does not exist. The recipe does not pass any secret; everything lives here.
 
-def load_or_create_databag_item(bag, id, existing)
-  return existing unless existing.nil? || existing.empty?
-
+def load_or_create_databag_item(bag, id)
   if databag_item_exists?(bag, id)
-    raise "grr_config: The data bag #{bag}/#{id} exists but could not be read. " \
-          "It will not be overwritten; check #{DATABAG_SECRET}."
+    data = read_databag_item(bag, id)
+    return data if data
+
+    raise "grr_config: The data bag #{bag}/#{id} exists but could not be decrypted with #{DATABAG_SECRET}. " \
+          "It will not be overwritten. If it is stale (e.g. encrypted with another secret), " \
+          "delete it with: knife data bag delete #{bag} #{id} -y"
   end
 
   Chef::Log.info("grr_config: The data bag #{bag}/#{id} was not found; generating it")
   data = yield.merge('id' => id)
   persist_databag_item(bag, id, data)
   data
+end
+
+# Reads and decrypts an item with knife. Returns a Hash, or nil if it cannot be read or
+# decrypted (wrong secret, plain-text item, invalid JSON...).
+def read_databag_item(bag, id)
+  out = shell_out("knife data bag show #{bag} #{id} --secret-file #{DATABAG_SECRET} -F json")
+  unless out.exitstatus.zero?
+    Chef::Log.warn("grr_config: knife could not decrypt #{bag}/#{id}: #{out.stderr.to_s.strip}")
+    return nil
+  end
+
+  json = out.stdout[/\{.*\}/m] # knife prints an "INFO: Using configuration..." line first
+  data = json && JSON.parse(json)
+  return nil unless data.is_a?(Hash)
+  # Values still looking like {"encrypted_data": ...} were not decrypted
+  return nil if data.values.any? { |v| v.is_a?(Hash) && v.key?('encrypted_data') }
+
+  data
+rescue JSON::ParserError => e
+  Chef::Log.warn("grr_config: invalid JSON reading #{bag}/#{id}: #{e.message}")
+  nil
 end
 
 def databag_item_exists?(bag, id)
@@ -119,7 +143,7 @@ end
 # ---- certs/grr_conf -------------------------------------------------------
 
 def grr_certs
-  @grr_certs ||= load_or_create_databag_item('certs', 'grr_conf', new_resource.grr_certs) { generate_grr_certs }
+  @grr_certs ||= load_or_create_databag_item('certs', 'grr_conf') { generate_grr_certs }
 end
 
 def generate_grr_certs
@@ -162,7 +186,7 @@ end
 # ---- passwords/db_grr -----------------------------------------------------
 
 def grr_passwords
-  @grr_passwords ||= load_or_create_databag_item('passwords', 'db_grr', new_resource.grr_secrets) { generate_grr_passwords }
+  @grr_passwords ||= load_or_create_databag_item('passwords', 'db_grr') { generate_grr_passwords }
 end
 
 def generate_grr_passwords
@@ -593,14 +617,20 @@ def stop_services
 end
 
 def drop_databases
+  # Names of the DB users: from the data bag if it exists (it is NOT created here: we are
+  # removing), otherwise the defaults used by generate_grr_passwords.
+  secrets = read_databag_item('passwords', 'db_grr') || {}
+  grr_db_user = secrets['grr_db_user'] || 'grr'
+  fleetspeak_db_user = secrets['fleetspeak_db_user'] || 'fleetspeak'
+
   execute 'drop_grr_databases_and_users' do
     sensitive true
     command <<-EOH
       set -e
       mariadb -e "DROP DATABASE IF EXISTS #{new_resource.grr_database};"
       mariadb -e "DROP DATABASE IF EXISTS #{new_resource.fleetspeak_database};"
-      mariadb -e "DROP USER IF EXISTS '#{new_resource.grr_db_user}'@'localhost';"
-      mariadb -e "DROP USER IF EXISTS '#{new_resource.fleetspeak_db_user}'@'localhost';"
+      mariadb -e "DROP USER IF EXISTS '#{grr_db_user}'@'localhost';"
+      mariadb -e "DROP USER IF EXISTS '#{fleetspeak_db_user}'@'localhost';"
       mariadb -e "FLUSH PRIVILEGES;"
     EOH
     only_if 'command -v mariadb >/dev/null 2>&1 && systemctl is-active --quiet mariadb'
