@@ -1,6 +1,11 @@
 cookbook-grr CHANGELOG
 ===============
 
+## 0.1.0
+
+  - Vimesa
+    - [b5be38d] Feature/#26699 config grr ssl (#3)
+
 ## 0.0.2
 
   - manegron
