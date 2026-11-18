@@ -1,5 +1,9 @@
 cookbook-grr CHANGELOG
 ===============
+## 0.1.1
+
+  - flopez
+    - Fix rpm build workflow after mock update
 
 ## 0.1.0
 
