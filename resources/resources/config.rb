@@ -48,6 +48,6 @@ attribute :grr_adminui_hosts, kind_of: Array
 attribute :grr_fleetspeak_hosts, kind_of: Array
 
 # --- S3 (installers and deployment scripts) -------------------------------
-attribute :s3_secrets,  kind_of: Hash, default: {}
-attribute :s3_host,  kind_of: [String, Array], default: ''
-attribute :s3_bucket,  kind_of: String, default: 'bucket'
+attribute :s3_secrets, kind_of: Hash, default: {}
+attribute :s3_host, kind_of: [String, Array], default: ''
+attribute :s3_bucket, kind_of: String, default: 'bucket'

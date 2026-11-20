@@ -603,7 +603,7 @@ def install_grr
 
   # Reconciles S3 with the staging tree on every run: if something was deleted from S3 (grr/,
   # installers/ or deployments/) it is uploaded again. s3cmd sync only transfers what differs, so
-  # when everything is in place it is just a listing. 
+  # when everything is in place it is just a listing.
   execute 'grr_s3_sync_initial' do
     command s3_sync_cmd
     timeout 600
