@@ -5,13 +5,16 @@ require 'securerandom'
 require 'json'
 require 'fileutils'
 require 'tmpdir'
+require 'shellwords'
 
 include Grr::Helper
 include Chef::Mixin::ShellOut
 
 DATABAGS_DIR = '/var/chef/data/data_bag_encrypted'.freeze
 DATABAG_SECRET = '/etc/chef/encrypted_data_bag_secret'.freeze
-GRR_PUBLISH_DIR = '/var/lib/rb_grr'.freeze
+# The installers and the deployment scripts are prepared on the GRR node (local staging dir inside
+# config_dir) and uploaded to S3: s3://<s3_bucket>/grr/{installers/{linux,windows},deployments}/
+GRR_S3_PREFIX = 'grr'.freeze
 
 action :add do
   package 'grr' do
@@ -43,11 +46,6 @@ action :remove do
   config_dir = new_resource.config_dir
 
   directory config_dir do
-    recursive true
-    action :delete
-  end
-
-  directory GRR_PUBLISH_DIR do
     recursive true
     action :delete
   end
@@ -361,17 +359,26 @@ def install_grr
   fix_script = "#{venv_dir}/grr_fix_installers.py"
   certs = grr_certs
 
+  # Local staging tree, uploaded to S3 as is
+  publish_dir            = "#{config_dir}/publish"
+  publish_installers_dir = "#{publish_dir}/installers"
+  publish_scripts_dir    = "#{publish_dir}/deployments"
+
+  # S3 access
+  s3_url      = "s3://#{new_resource.s3_bucket}/#{GRR_S3_PREFIX}"
+  s3_base_cmd = s3_command
+  s3_ready    = !s3_base_cmd.nil?
+  s3_cmd      = s3_base_cmd || 's3cmd'
+  s3_sync_cmd = "#{s3_cmd} sync --no-progress --delete-removed #{publish_dir}/ #{s3_url}/"
+
   # The IP address and name that clients use to connect to this GRR server. These are specified in
   # the deployment scripts as default values.
   grr_fleetspeak_hosts = Array(new_resource.grr_fleetspeak_hosts).compact
 
-  deploy_server_name   = (grr_fleetspeak_hosts.first || new_resource.hostname).to_s.gsub(/[^A-Za-z0-9.-]/, '')
-  deploy_server_ip     = grr_service_ip('grr-fleetspeak', node['ipaddress']).to_s.gsub(/[^0-9A-Fa-f:.]/, '')
+  deploy_server_name = (grr_fleetspeak_hosts.first || new_resource.hostname).to_s.gsub(/[^A-Za-z0-9.-]/, '')
+  deploy_server_ip   = grr_service_ip('grr-fleetspeak', node['ipaddress']).to_s.gsub(/[^0-9A-Fa-f:.]/, '')
 
-  publish_installers_dir = "#{GRR_PUBLISH_DIR}/installers"
-  publish_scripts_dir    = "#{GRR_PUBLISH_DIR}/deployments"
-
-  directory GRR_PUBLISH_DIR do
+  directory publish_dir do
     owner 'root'
     group 'root'
     mode '0755'
@@ -393,6 +400,7 @@ def install_grr
       group 'root'
       mode '0755'
       variables(server_ip: deploy_server_ip, server_name: deploy_server_name)
+      notifies :run, 'execute[grr_s3_sync]', :delayed
     end
   end
 
@@ -417,6 +425,16 @@ def install_grr
 
   execute 'grr_publish_installers' do
     command publish_cmd
+    notifies :run, 'execute[grr_s3_sync]', :immediately
+    action :nothing
+  end
+
+  # Uploads the staging tree to S3
+  execute 'grr_s3_sync' do
+    command s3_sync_cmd
+    timeout 600
+    sensitive true
+    only_if { s3_ready }
     action :nothing
   end
 
@@ -575,11 +593,59 @@ def install_grr
     notifies :run, 'execute[grr_rename_windows_installers]', :immediately
   end
 
+  # There are installers but nothing staged yet (first run, or after a :remove)
   execute 'grr_publish_installers_initial' do
     command publish_cmd
-    not_if { !Dir.glob("#{installers_dir}/*").empty? }
+    only_if { !Dir.glob("#{installers_dir}/*").empty? }
     not_if { !Dir.glob("#{publish_installers_dir}/*/*").empty? }
+    notifies :run, 'execute[grr_s3_sync]', :immediately
   end
+
+  # Reconciles S3 with the staging tree on every run: if something was deleted from S3 (grr/,
+  # installers/ or deployments/) it is uploaded again. s3cmd sync only transfers what differs, so
+  # when everything is in place it is just a listing. 
+  execute 'grr_s3_sync_initial' do
+    command s3_sync_cmd
+    timeout 600
+    sensitive true
+    only_if do
+      s3_ready &&
+        !Dir.glob("#{publish_installers_dir}/*/*").empty? &&
+        !Dir.glob("#{publish_scripts_dir}/*").empty?
+    end
+  end
+end
+
+# Base s3cmd command with host and credentials as options
+def s3_command
+  secrets = (new_resource.s3_secrets || {}).to_h
+  pick = ->(*names) { names.map { |n| secrets[n] }.compact.map(&:to_s).reject(&:empty?).first }
+
+  access_key = pick.call('s3_access_key_id')
+  secret_key = pick.call('s3_secret_key_id')
+  # s3_host may arrive as a String or as a list of hosts (the first one is used); quotes or spaces
+  # coming with the value would break the host
+  host = Array(new_resource.s3_host).flatten.compact.first.to_s.delete(%q("')).strip
+  # HTTPS unless the host explicitly says http:// (s3.service sits behind nginx, which answers
+  # HTTP with a 301 redirect to HTTPS)
+  https = !host.start_with?('http://')
+  host = host.sub(%r{\Ahttps?://}, '').chomp('/')
+
+  if host.empty? || access_key.nil? || secret_key.nil?
+    Chef::Log.warn('grr_config: S3 data (s3_host / s3_secrets) is not complete; installers are not uploaded')
+    return
+  end
+
+  # -c /dev/null: do not read any s3cfg of root, everything comes from the options
+  cmd = [
+    's3cmd', '-c', '/dev/null',
+    "--access_key=#{access_key}", "--secret_key=#{secret_key}",
+    "--host=#{host}", "--host-bucket=#{host}",
+    https ? '--ssl' : '--no-ssl'
+  ]
+  # internal service: its certificate is usually issued by the cluster's own CA
+  cmd << '--no-check-certificate' if https
+  cmd.shelljoin
 end
 
 def start_services
