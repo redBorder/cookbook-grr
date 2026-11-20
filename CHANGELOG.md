@@ -1,5 +1,13 @@
 cookbook-grr CHANGELOG
 ===============
+## 0.2.0
+
+  - rb-aguzman
+    - [b72f9ca] Merge pull request #6 from redBorder/improvement/#27227_add_grr_to_s3
+  - vimesa
+    - [27b7fd2] Fix test
+    - [7b55da9] Upload the GRR installers and deployment to S3
+
 ## 0.1.1
 
   - flopez
